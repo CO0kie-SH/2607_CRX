@@ -76,3 +76,5 @@
 })();
 
 try { importScripts('./background.js'); } catch (e) {}
+try { importScripts('./button6_worker.js'); } catch (e) { console.error('button6_worker load failed', e); }
+try { importScripts('./button11_worker.js'); } catch (e) { console.error('button11_worker load failed', e); }

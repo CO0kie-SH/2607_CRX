@@ -10,9 +10,11 @@ const urlLoggerLogsElement = document.getElementById("url-logger-logs");
 const urlLoggerCopyButton = document.getElementById("url-logger-copy");
 const urlLoggerExportButton = document.getElementById("url-logger-export");
 const urlLoggerClearButton = document.getElementById("url-logger-clear");
+const popupTitleElement = document.querySelector("h1");
 const REDACTED_VALUE = "[REDACTED]";
-const POPUP_BUILD = "release-26.7.5A-button6-button8";
-const DEFAULT_BACKEND_BASE_URL = "http://127.0.0.1:8080/";
+const POPUP_BUILD = "7.29B";
+const DEFAULT_BACKEND_BASE_URL = "http://127.0.0.1:8081/";
+const LEGACY_BACKEND_BASE_URL = "http://127.0.0.1:8080/";
 const DEFAULT_REQUEST_TIMEOUT_MS = 3000;
 const HTML_TEXT_UPLOAD_TIMEOUT_MS = 10000;
 const HTML_FULL_UPLOAD_TIMEOUT_MS = 30000;
@@ -37,9 +39,23 @@ const ADDRESSGEN_ADDRESS_FLOAT_HOST_ID = "crx-addressgen-address-float-host";
 const BACKEND_BASE_URL_STORAGE_KEY = "settings.backendBaseUrl";
 const BACKEND_TOKEN_STORAGE_KEY = "settings.backendToken";
 const IP_CAPTURE_STORAGE_KEY = "settings.lastIpCapture";
+const BUTTON6_PENDING_STORAGE_KEY = "button6.pending";
+const BUTTON11_PENDING_STORAGE_KEY = "button11.pending";
+const SIDEPANEL_ACTIVE_MODE_STORAGE_KEY = "sidepanel.activeMode";
+const SIDEPANEL_PENDING_FEATURE_STORAGE_KEY = "sidepanel.pendingFeature";
+const BUTTON6_NATIVE_PANEL_PENDING_STORAGE_KEY = "button6.nativePanelPending";
+const BUTTON6_SOURCE_WINDOW_STORAGE_KEY = "button6.sourceWindowId";
+const BUTTON6_TARGET_URL = "https://ipinfo.io/explore";
 const URL_LOGGER_SETTINGS_KEY = "urlLogger.settings";
 const URL_LOGGER_LOGS_KEY = "urlLogger.global.logs";
 const MAX_RUNTIME_LOGS = 300;
+const popupSearchParams = new URLSearchParams(window.location.search);
+const popupPromptContext = {
+  active: popupSearchParams.get("mode") === "button6_prompt",
+  sourceWindowId: Number(popupSearchParams.get("sourceWindowId")),
+  sourceTabId: Number(popupSearchParams.get("sourceTabId")),
+  jobId: String(popupSearchParams.get("jobId") || "")
+};
 const SENSITIVE_PARAM_NAMES = new Set([
   "access_token",
   "auth",
@@ -467,7 +483,7 @@ async function ensureDefaultBackendBaseUrl() {
   const result = await chrome.storage.local.get(BACKEND_BASE_URL_STORAGE_KEY);
   const storedValue = result[BACKEND_BASE_URL_STORAGE_KEY];
 
-  if (storedValue) {
+  if (storedValue && storedValue !== LEGACY_BACKEND_BASE_URL) {
     return storedValue;
   }
 
@@ -476,7 +492,8 @@ async function ensureDefaultBackendBaseUrl() {
   });
 
   logEvent("backend_base_url_initialized", {
-    value: DEFAULT_BACKEND_BASE_URL
+    value: DEFAULT_BACKEND_BASE_URL,
+    previousValue: storedValue || ""
   });
 
   return DEFAULT_BACKEND_BASE_URL;
@@ -607,6 +624,25 @@ function formatRuntimeLogEntry(entry, index, total) {
     lines.push(`保存位置: ${details.savedTo}`);
   }
 
+  if (details.jobId) {
+    lines.push(`任务ID: ${details.jobId}`);
+  }
+
+  if (details.delayMs !== undefined) {
+    lines.push(`延迟触发: ${details.delayMs}ms`);
+  }
+
+  if (details.panelMode) {
+    const panelModeLabels = {
+      side_panel: "浏览器 Side Panel",
+      embedded: "网页内侧栏",
+      native_pending: "等待点击打开原生侧栏",
+      right_window: "旧版右侧功能窗口",
+      error: "打开失败"
+    };
+    lines.push(`功能区模式: ${panelModeLabels[details.panelMode] || details.panelMode}`);
+  }
+
   if (details.windowId !== undefined) {
     lines.push(`窗口ID: ${details.windowId}`);
   }
@@ -633,6 +669,28 @@ function formatRuntimeLogEntry(entry, index, total) {
 
   if (details.status) {
     lines.push(`状态: ${details.status}`);
+  }
+
+  if (details.trigger) {
+    lines.push(`触发来源: ${details.trigger}`);
+  }
+
+  if (details.reason) {
+    lines.push(`触发原因: ${details.reason}`);
+  }
+
+  if (details.attempt !== undefined) {
+    lines.push(`尝试次数: ${details.attempt}`);
+  }
+
+  if (details.tokenStatus) {
+    const tokenStatusLabels = {
+      updated: "已获取新 token",
+      reused: "已复用旧 token",
+      missing: "旧 token 缺失",
+      unchanged: "旧 token 保持不变"
+    };
+    lines.push(`Token状态: ${tokenStatusLabels[details.tokenStatus] || details.tokenStatus}`);
   }
 
   if (details.active !== undefined) {
@@ -2874,6 +2932,7 @@ async function injectChatgptAccessTokenOverlay(tab, payload) {
   return overlayResult;
 }
 
+// Legacy button6 AT implementation retained for later reuse; the button now opens IPInfo via Side Panel.
 async function captureChatgptAccessToken(updatePhase = () => {}) {
   const backendBaseUrl = normalizeBackendBaseUrl(backendBaseUrlInput.value);
   const token = popupState.backendToken || "";
@@ -4520,6 +4579,179 @@ async function checkAddressgenCitySupportFromMayips(updatePhase = () => {}) {
   }
 }
 
+function startButton6SidePanelOpen() {
+  const windowId = popupState.currentPageTab?.windowId;
+
+  if (!Number.isInteger(windowId)) {
+    throw new Error("当前窗口信息尚未就绪，请重新打开扩展 Popup。");
+  }
+
+  const payload = {
+    jobId: `button6-${Date.now()}`,
+    windowId,
+    targetUrl: BUTTON6_TARGET_URL,
+    requestedAt: new Date().toISOString()
+  };
+
+  const storagePatch = {
+    [SIDEPANEL_ACTIVE_MODE_STORAGE_KEY]: "button6",
+    [BUTTON6_SOURCE_WINDOW_STORAGE_KEY]: windowId
+  };
+  if (!popupPromptContext.active) {
+    storagePatch[BUTTON6_PENDING_STORAGE_KEY] = payload;
+  }
+
+  const storePromise = chrome.storage.session.set(storagePatch);
+  const clearPendingPromise = chrome.storage.session.remove(BUTTON6_NATIVE_PANEL_PENDING_STORAGE_KEY);
+  const optionsPromise = chrome.sidePanel.setOptions({
+    path: "sidepanel.html",
+    enabled: true
+  });
+  const panelPromise = chrome.sidePanel.open({ windowId });
+
+  return Promise.all([
+    storePromise,
+    clearPendingPromise,
+    optionsPromise,
+    panelPromise
+  ]).then(() => ({
+    ok: true,
+    jobId: payload.jobId,
+    windowId,
+    targetUrl: BUTTON6_TARGET_URL,
+    promptMode: popupPromptContext.active
+  }));
+}
+
+async function completeButton6PopupPrompt() {
+  const response = await chrome.runtime.sendMessage({
+    type: "BUTTON6_POPUP_PROMPT_COMPLETED",
+    payload: {
+      jobId: popupPromptContext.jobId,
+      sourceWindowId: popupPromptContext.sourceWindowId,
+      sourceTabId: popupPromptContext.sourceTabId
+    }
+  });
+  if (!response?.ok) {
+    throw new Error(response?.error || "按钮6 Popup 状态清理失败。");
+  }
+  return response;
+}
+
+function applyButton6PopupPromptMode() {
+  if (!popupPromptContext.active) {
+    return;
+  }
+
+  document.body.classList.add("button6-prompt-mode");
+  if (popupTitleElement) {
+    popupTitleElement.textContent = "按钮6待确认";
+  }
+  const button = featureButtons.find((item) => item.dataset.feature === "6");
+  const featurePanel = button?.closest(".panel");
+  featurePanel?.classList.add("prompt-feature-panel");
+  button?.classList.add("is-prompt-target");
+  if (!popupState.currentPageTab) {
+    button.disabled = true;
+    setSaveStatus("IPInfo 来源标签页已关闭。", true);
+    return;
+  }
+  setSaveStatus("按钮6等待确认。", false);
+  button?.focus({ preventScroll: true });
+}
+
+function openButton6NativePanelFromButton1Gesture() {
+  const windowId = Number(popupState.currentPageTab?.windowId);
+  if (!Number.isInteger(windowId)) {
+    return Promise.resolve({
+      ok: false,
+      error: "当前窗口信息尚未就绪。"
+    });
+  }
+
+  const optionsPromise = chrome.sidePanel.setOptions({
+    path: "sidepanel.html",
+    enabled: true
+  });
+  const openPromise = chrome.sidePanel.open({ windowId });
+  const storagePromise = chrome.storage.session.set({
+    [SIDEPANEL_ACTIVE_MODE_STORAGE_KEY]: "button6"
+  });
+  const clearPendingPromise = chrome.storage.session.remove(BUTTON6_NATIVE_PANEL_PENDING_STORAGE_KEY);
+
+  return Promise.all([
+    optionsPromise,
+    openPromise,
+    storagePromise,
+    clearPendingPromise
+  ]).then(() => ({
+    ok: true,
+    windowId
+  })).catch((error) => ({
+    ok: false,
+    windowId,
+    error: error.message || String(error)
+  }));
+}
+
+async function triggerButton6AfterBackendToken() {
+  let windowId = Number(popupState.currentPageTab?.windowId);
+  if (!Number.isInteger(windowId)) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    windowId = Number(tabs?.[0]?.windowId);
+  }
+  if (!Number.isInteger(windowId)) {
+    throw new Error("后端 token 已刷新，但当前窗口信息不存在。");
+  }
+
+  const response = await chrome.runtime.sendMessage({
+    type: "SCHEDULE_BUTTON6_AFTER_TOKEN",
+    payload: {
+      windowId,
+      trigger: "manual_backend_token_completed",
+      reason: "popup_button1"
+    }
+  });
+  if (!response?.ok) {
+    throw new Error(response?.error || "按钮6延迟触发失败。");
+  }
+  return response;
+}
+
+function startButton11SidePanelCapture() {
+  const backendBaseUrl = normalizeBackendBaseUrl(backendBaseUrlInput.value);
+  const token = popupState.backendToken || "";
+  const windowId = popupState.currentPageTab?.windowId;
+
+  if (!token) {
+    throw new Error("请先点击\"刷新后端token\"。");
+  }
+
+  if (!Number.isInteger(windowId)) {
+    throw new Error("当前窗口信息尚未就绪，请重新打开扩展 Popup。");
+  }
+
+  const payload = {
+    jobId: `button11-${Date.now()}`,
+    backendBaseUrl,
+    token,
+    windowId,
+    requestedAt: new Date().toISOString()
+  };
+
+  const storePromise = chrome.storage.session.set({
+    [SIDEPANEL_ACTIVE_MODE_STORAGE_KEY]: "button11",
+    [BUTTON11_PENDING_STORAGE_KEY]: payload
+  });
+  const panelPromise = chrome.sidePanel.open({ windowId });
+
+  return Promise.all([storePromise, panelPromise]).then(() => ({
+    ok: true,
+    jobId: payload.jobId,
+    windowId
+  }));
+}
+
 function bindPopupActions() {
   saveBackendUrlButton.addEventListener("click", () => {
     void saveBackendBaseUrl();
@@ -4558,14 +4790,19 @@ function bindPopupActions() {
 
       if (featureId === "1") {
         const originalText = button.textContent;
+        const nativePanelPromise = openButton6NativePanelFromButton1Gesture();
 
         try {
           button.disabled = true;
           button.textContent = "刷新中...";
           const result = await refreshBackendToken();
-          setSaveStatus(`后端token刷新成功：${result.token}，已记录 ${result.tabCount} 个标签页。`);
+          button.textContent = "等待3秒...";
+          const nativePanelResult = await nativePanelPromise;
+          const button6Result = await triggerButton6AfterBackendToken();
+          const panelStatus = nativePanelResult.ok ? "原生侧栏已打开" : "原生侧栏等待再次点击";
+          setSaveStatus(`后端token刷新成功：${result.token}，已记录 ${result.tabCount} 个标签页；${panelStatus}；按钮6已触发：${button6Result.jobId}。`);
         } catch (error) {
-          setSaveStatus(error.message || "刷新后端token失败。", true);
+          setSaveStatus(error.message || "刷新后端token或启动按钮6失败。", true);
           if (!isRequestTimeoutError(error)) {
             console.error(error);
           }
@@ -4793,24 +5030,42 @@ function bindPopupActions() {
 
         try {
           button.disabled = true;
-          const result = await captureChatgptAccessToken((phase) => {
-            button.textContent = phase || "提取中...";
-          });
-          const workspaceCount = result.workspaceResult?.workspaceCount ?? 0;
-          const workspaceSuffix = result.workspaceResult?.error
-            ? `；空间查询失败：${result.workspaceResult.error}`
-            : `；空间 ${workspaceCount} 个`;
-
-          if (result.savedTo) {
-            setSaveStatus(`ChatGPT AT 已提取并保存：${result.savedTo}${workspaceSuffix}`, Boolean(result.workspaceResult?.error));
+          button.textContent = "打开面板...";
+          const result = await startButton6SidePanelOpen();
+          if (popupPromptContext.active) {
+            await completeButton6PopupPrompt();
+            setSaveStatus("按钮6原生侧栏已打开。");
+            window.setTimeout(() => window.close(), 80);
           } else {
-            setSaveStatus(`ChatGPT AT 已提取，浮窗已显示，但保存后端失败：${result.saveError || "未知错误"}${workspaceSuffix}`, true);
+            setSaveStatus(`按钮6页面任务已提交：${result.jobId}`);
           }
         } catch (error) {
-          setSaveStatus(error.message || "提取网页AT失败。", true);
-          if (!isRequestTimeoutError(error)) {
-            console.error(error);
-          }
+          setSaveStatus(error.message || "按钮6页面任务启动失败。", true);
+          console.error(error);
+        } finally {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+
+        logEvent("feature_button_clicked", {
+          featureId,
+          targetUrl: BUTTON6_TARGET_URL,
+          mode: "sidepanel"
+        });
+        return;
+      }
+
+      if (featureId === "11") {
+        const originalText = button.textContent;
+
+        try {
+          button.disabled = true;
+          button.textContent = "打开面板...";
+          const result = await startButton11SidePanelCapture();
+          setSaveStatus(`按钮11后台任务已提交：${result.jobId}`);
+        } catch (error) {
+          setSaveStatus(error.message || "按钮11任务启动失败。", true);
+          console.error(error);
         } finally {
           button.disabled = false;
           button.textContent = originalText;
@@ -4908,26 +5163,68 @@ function bindPopupActions() {
         : [];
     }
 
+    if (changes[BACKEND_TOKEN_STORAGE_KEY]) {
+      popupState.backendToken = String(changes[BACKEND_TOKEN_STORAGE_KEY].newValue || "");
+    }
+
     if (changes[URL_LOGGER_SETTINGS_KEY] || changes[URL_LOGGER_LOGS_KEY]) {
       renderUrlLogger();
     }
   });
 }
 
-chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-  if (chrome.runtime.lastError) {
-    const errorMessage = chrome.runtime.lastError.message;
-
-    messageElement.textContent = "读取当前页面信息失败。";
-    logEvent("popup_opened", {
-      page: "popup",
-      error: errorMessage
-    });
+async function consumeSidepanelPendingFeature() {
+  const serialized = localStorage.getItem(SIDEPANEL_PENDING_FEATURE_STORAGE_KEY);
+  if (!serialized) {
     return;
   }
 
-  const pageInfo = getCurrentPageInfo(tabs[0]);
-  popupState.currentPageTab = tabs[0] || null;
+  localStorage.removeItem(SIDEPANEL_PENDING_FEATURE_STORAGE_KEY);
+  let pending = null;
+  try {
+    pending = JSON.parse(serialized);
+  } catch (_error) {
+    return;
+  }
+  const requestedAt = Date.parse(pending.requestedAt || "");
+  if (Number.isFinite(requestedAt) && Date.now() - requestedAt > 30000) {
+    return;
+  }
+
+  const featureId = String(pending.featureId || "");
+  const button = featureButtons.find((item) => item.dataset.feature === featureId);
+  if (!button || button.disabled) {
+    setSaveStatus(`功能${featureId || "?"}当前不可执行。`, true);
+    return;
+  }
+  button.click();
+}
+
+async function resolvePopupCurrentPageTab() {
+  if (popupPromptContext.active) {
+    if (!Number.isInteger(popupPromptContext.sourceTabId)) {
+      throw new Error("按钮6 Popup 缺少来源标签页。");
+    }
+    const sourceTab = await chrome.tabs.get(popupPromptContext.sourceTabId);
+    if (
+      Number.isInteger(popupPromptContext.sourceWindowId)
+      && sourceTab.windowId !== popupPromptContext.sourceWindowId
+    ) {
+      throw new Error("按钮6 Popup 来源窗口已变化。");
+    }
+    if (!String(sourceTab.url || sourceTab.pendingUrl || "").startsWith(BUTTON6_TARGET_URL)) {
+      throw new Error("按钮6 Popup 来源页已离开 IPInfo。");
+    }
+    return sourceTab;
+  }
+
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tabs[0] || null;
+}
+
+const currentPageTabPromise = resolvePopupCurrentPageTab().then((tab) => {
+  const pageInfo = getCurrentPageInfo(tab);
+  popupState.currentPageTab = tab;
 
   messageElement.textContent = pageInfo?.title
     ? `当前页面：${pageInfo.title}（${POPUP_BUILD}）`
@@ -4936,12 +5233,34 @@ chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   logEvent("popup_opened", {
     page: "popup",
     popupBuild: POPUP_BUILD,
+    promptMode: popupPromptContext.active,
     currentPage: pageInfo
+  });
+}).catch((error) => {
+  popupState.currentPageTab = null;
+  messageElement.textContent = `读取当前页面信息失败。（${POPUP_BUILD}）`;
+  logEvent("popup_opened", {
+    page: "popup",
+    popupBuild: POPUP_BUILD,
+    promptMode: popupPromptContext.active,
+    error: error.message || String(error)
   });
 });
 
 bindPopupActions();
-void loadBackendBaseUrl();
-void loadBackendTokenState();
-void loadLastIpInfoState();
-void loadUrlLoggerState();
+void Promise.all([
+  currentPageTabPromise,
+  loadBackendBaseUrl(),
+  loadBackendTokenState(),
+  loadLastIpInfoState(),
+  loadUrlLoggerState()
+]).then(() => {
+  applyButton6PopupPromptMode();
+  if (!popupPromptContext.active) {
+    return consumeSidepanelPendingFeature();
+  }
+  return undefined;
+}).catch((error) => {
+  setSaveStatus(error.message || "Side Panel 功能启动失败。", true);
+  console.error(error);
+});

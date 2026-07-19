@@ -9,4 +9,4 @@
 set fei_title="浏览器插件"
 ::set only_work=Workday
 
-python main.py --host 0.0.0.0 --port 8080 %*
+python main.py --host 0.0.0.0 --port 8081 %*

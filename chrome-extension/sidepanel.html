@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>扩展侧边任务</title>
+    <link rel="stylesheet" href="sidepanel.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow" id="panel-eyebrow">BUTTON 11</div>
+          <h1 id="panel-title">AT 任务</h1>
+        </div>
+        <span class="status-badge idle" id="status-badge">待命</span>
+      </header>
+
+      <section class="progress-section" aria-label="任务进度">
+        <div class="panel-feature-matrix" id="panel-feature-matrix" aria-label="功能按钮矩阵">
+          <button class="panel-feature-button" data-panel-feature="1" type="button">刷新后端token</button>
+          <button class="panel-feature-button" data-panel-feature="2" type="button">提取页面</button>
+          <button class="panel-feature-button" data-panel-feature="3" type="button" disabled title="已计划弃用，功能代码暂时保留">抓取IP信息</button>
+          <button class="panel-feature-button" data-panel-feature="4" type="button" disabled title="已计划弃用，功能代码暂时保留">提取地址</button>
+          <button class="panel-feature-button" data-panel-feature="5" type="button">JS探针</button>
+          <button class="panel-feature-button" data-panel-feature="6" type="button" title="打开 https://ipinfo.io/explore">打开ipinfo</button>
+          <button class="panel-feature-button" data-panel-feature="7" type="button">MayIP信息</button>
+          <button class="panel-feature-button" data-panel-feature="8" type="button">城市检查</button>
+          <button class="panel-feature-button" data-panel-feature="9" type="button">功能9</button>
+          <button class="panel-feature-button" data-panel-feature="10" type="button">功能10</button>
+          <button class="panel-feature-button" data-panel-feature="11" type="button">提取网页AT</button>
+          <button class="panel-feature-button" data-panel-feature="12" type="button">功能12</button>
+          <button class="panel-feature-button" data-panel-feature="13" type="button">功能13</button>
+          <button class="panel-feature-button" data-panel-feature="14" type="button">功能14</button>
+          <button class="panel-feature-button" data-panel-feature="15" type="button">功能15</button>
+          <button class="panel-feature-button" data-panel-feature="16" type="button">功能16</button>
+          <button class="panel-feature-button" data-panel-feature="17" type="button">功能17</button>
+          <button class="panel-feature-button" data-panel-feature="18" type="button">功能18</button>
+          <button class="panel-feature-button" data-panel-feature="19" type="button">功能19</button>
+          <button class="panel-feature-button" data-panel-feature="20" type="button">功能20</button>
+        </div>
+        <div class="progress-meta">
+          <strong id="phase-text">暂无任务</strong>
+          <span id="progress-text">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <p class="message" id="job-message">等待按钮11启动任务。</p>
+      </section>
+
+      <section class="details-section" id="button6-details" hidden>
+        <dl class="details-grid">
+          <div><dt>目标地址</dt><dd id="button6-target-url">https://ipinfo.io/explore</dd></div>
+          <div><dt>当前地址</dt><dd id="button6-page-url">--</dd></div>
+          <div><dt>页面标题</dt><dd id="button6-page-title">--</dd></div>
+          <div><dt>当前国家</dt><dd id="button6-country">--</dd></div>
+          <div><dt>当前城市</dt><dd id="button6-city">--</dd></div>
+          <div><dt>标签页</dt><dd id="button6-tab-id">--</dd></div>
+          <div><dt>窗口</dt><dd id="button6-window-id">--</dd></div>
+          <div><dt>开始时间</dt><dd id="button6-started-at">--</dd></div>
+          <div><dt>完成时间</dt><dd id="button6-completed-at">--</dd></div>
+        </dl>
+      </section>
+
+      <section class="details-section" id="button11-details">
+        <dl class="details-grid">
+          <div><dt>账号</dt><dd id="user-email">--</dd></div>
+          <div><dt>计划</dt><dd id="plan-type">--</dd></div>
+          <div><dt>Workspace</dt><dd id="workspace-count">0</dd></div>
+          <div><dt>保存位置</dt><dd id="saved-to">--</dd></div>
+          <div><dt>开始时间</dt><dd id="started-at">--</dd></div>
+          <div><dt>完成时间</dt><dd id="completed-at">--</dd></div>
+        </dl>
+      </section>
+
+      <section class="token-section" id="button11-token-section">
+        <div class="section-heading">
+          <h2>网页 Access Token</h2>
+          <span id="token-state">未提取</span>
+        </div>
+        <code class="token-preview" id="token-preview">--</code>
+      </section>
+
+      <section class="feature-section">
+        <div class="section-heading">
+          <h2>功能操作</h2>
+          <span id="feature-mode-label">按钮11</span>
+        </div>
+        <div class="actions" id="feature-actions">
+          <button id="button6-activate" type="button" disabled hidden>转到页面</button>
+          <button class="quiet" id="button6-refresh" type="button" disabled hidden>刷新页面</button>
+          <button id="button6-copy-content" type="button" disabled hidden>复制内容</button>
+          <button class="quiet" id="refresh-job" type="button">刷新AT</button>
+          <button id="copy-token" type="button" disabled>复制AT</button>
+          <button id="open-session" type="button" disabled>打开Session</button>
+          <button id="export-result" type="button" disabled>导出json</button>
+        </div>
+      </section>
+
+      <section class="content-section" id="page-content-section">
+        <div class="section-heading">
+          <h2 id="page-content-title">任务内容</h2>
+          <span id="page-content-meta">0 字符</span>
+        </div>
+        <pre class="content-box" id="page-content-box">--</pre>
+      </section>
+
+      <section class="log-section" id="task-log-section">
+        <div class="section-heading">
+          <h2>任务日志</h2>
+          <span id="task-log-count">0 条</span>
+        </div>
+        <pre class="task-log-box" id="task-log-box">暂无任务日志。</pre>
+      </section>
+
+      <section class="error-section" id="error-section" hidden>
+        <h2>任务提示</h2>
+        <pre id="error-text"></pre>
+      </section>
+
+      <section class="workspace-section" id="button11-workspace-section">
+        <div class="section-heading">
+          <h2>Workspace</h2>
+          <span id="workspace-summary">0 项</span>
+        </div>
+        <div class="workspace-list" id="workspace-list">
+          <div class="empty-state">暂无 Workspace 数据</div>
+        </div>
+      </section>
+    </main>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

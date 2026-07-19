@@ -1,10 +1,10 @@
 # Chrome URL 跳转捕获扩展
 
-> 当前版本：`26.7.5A`
-> 最后更新：`2026-07-05A`
-> 插件版本：`26.7.5`
-> 插件展示版本：`26.7.5A`
-> 日志构建：`url-capture-v16`
+> 当前版本：`26.7.19B`
+> 最后更新：`2026-07-19B`
+> 插件版本：`26.7.19`
+> 插件展示版本：`26.7.19B`
+> 日志构建：`url-capture-v25`
 > 项目定位：合法合规地调试 Chrome 页面跳转链路，并通过本地 aiohttp 服务接收扩展上报、生成 CTF 地址/姓名/卡片测试数据和保存调试日志。
 
 ---
@@ -19,6 +19,7 @@
 - 通过 popup 开关控制是否记录 URL 变化，默认开启
 - 在 popup 运行日志框内输出脱敏后的完整 URL 和刷新 token 请求链路
 - 使用后台 `service worker` 记录结构化日志
+- 浏览器启动后自动连接已保存的后端地址，并按按钮1流程重新申请后端 token
 - 记录 popup 打开时的当前页面信息
 - 监听地址栏变化、主框架导航、请求发出前和导航错误事件
 - 尽量捕获一闪而过、随后被拦截或重定向的中间 URL
@@ -36,6 +37,8 @@
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| `26.7.19B` | 2026-07-19B | 修正版；插件展示版本更新为 `26.7.19B`，Popup 扩展标记更新为 `7.29B`；按钮6自动任务在原生 Side Panel 缺少用户手势时恢复 IPInfo 网页内侧栏，并在来源窗口重新获得焦点后弹出按钮6确认 Popup；用户点击后打开原生 Side Panel、移除网页内嵌栏并关闭确认窗口，且不重复执行已完成的 IPInfo 自动任务 |
+| `26.7.19A` | 2026-07-19A | 封版版本；默认后端端口统一为 `8081`；浏览器启动后自动连接后端并重新执行按钮1 token 获取流程，`onStartup` 未触发时可由首次启动页窗口焦点事件兜底连接并复用旧 token；popup 扩展到功能1-20；按钮6改名为“打开网页AT”，按钮11保留“提取网页AT”并升级为 Side Panel + Service Worker 持久任务；支持无缓存刷新、网页 AT 复制、Codex JSON 导出、Workspace AT 交换/复制、网页 AT 与空间 AT 分字段保存、空间 AT 差异缩写和指纹显示，以及复制按钮按获取状态显示绿色 |
 | `26.7.5A` | 2026-07-05A | 封版版本；插件 `version` 更新为 `26.7.5`，`version_name` 更新为 `26.7.5A`；后台日志构建更新为 `url-capture-v16`；按钮6“提取网页AT”补齐 workspace 导出闭环，浮窗新增 workspace 列表、单项复制 AT、导出空间 AT JSON、导出 `team.csv`、`/backend-api/me` 状态回填和批量导出进度条；按钮8由占位入口升级为“城市检查”，可基于 MayIP + AddressGen 查询城市、申请地址并显示浮窗 |
 | `26.7.4A` | 2026-07-04A | 封版版本；插件 `version` 更新为 `26.7.4`，`version_name` 更新为 `26.7.4A`；后台日志构建更新为 `url-capture-v15`；popup 按钮3“抓取IP信息”和按钮4“提取地址”入口置灰禁用，功能代码和后端接口暂时保留；新增 `tmp_md/buttons_3_4_deprecation.md` 记录弃用范围、影响和恢复方式 |
 | `26.6.28A` | 2026-06-28A | 完成按钮7“MayIP信息”链路：popup 直接请求 `https://mayips.com/`，将返回文本按 JSON-RPC 上传到 `/api/html/text`；后端从 MayIP JSON 中提取 `country`、`state/region_name`、`city` 并返回前端；前端保存到 `lastIpInfo`，运行日志和状态栏显示 `country / region / city`，按钮4后续生成地址时优先使用保存的 country |
@@ -83,7 +86,7 @@
 <PROJECT_ROOT>/
 ├── README.md
 ├── main.py                    # aiohttp 服务启动入口，启动日志写入 log/runtime-YYYY-MM-DD.log
-├── main.bat                   # Windows 一键启动脚本，创建 db/log 并以 0.0.0.0:8080 启动后端
+├── main.bat                   # Windows 一键启动脚本，创建 db/log 并以 0.0.0.0:8081 启动后端
 ├── ctf_toolkit.py             # 地址、kanji/kana 姓名和 Luhn 测试卡生成工具
 ├── server/
 │   ├── app.py                 # HTTP 路由、地址/姓名/卡片生成接口、扩展日志上报接口
@@ -94,9 +97,13 @@
 └── chrome-extension/
     ├── manifest.json           # Chrome 扩展配置
     ├── background.js           # 后台 service worker，负责捕获导航和结构化日志
+    ├── button11_worker.js      # 按钮11后台任务，负责前台新页、Session 提取、AT 保存、Workspace 查询和空间切换
     ├── content.js              # 页面内 URL 变化采集，不再注入浮窗
     ├── popup.html              # 扩展图标 popup 主页面
-    └── popup.js                # 地址配置、功能按钮、URL 日志展示和手动上报
+    ├── popup.js                # 地址配置、功能按钮、URL 日志展示和手动上报
+    ├── sidepanel.html          # 按钮11 Side Panel 主界面
+    ├── sidepanel.css           # Side Panel 样式
+    └── sidepanel.js            # Side Panel 任务状态、网页/空间 AT 分离复制和结果导出
 ```
 
 说明：
@@ -149,7 +156,7 @@ Windows 推荐直接使用项目根目录下的启动脚本：
 - 创建 `db/` 和 `log/` 目录。
 - 设置 `PYTHONIOENCODING=utf-8`，减少中文日志乱码。
 - 将 `D:\0Code2\py312`、`D:\job\py312\Scripts` 和 `D:\job\py312` 加入当前窗口的 `PATH`。
-- 执行 `python main.py --host 0.0.0.0 --port 8080 %*`，并透传额外命令行参数。
+- 执行 `python main.py --host 0.0.0.0 --port 8081 %*`，并透传额外命令行参数。
 
 普通浏览器可使用默认本机地址：
 
@@ -160,33 +167,33 @@ D:\0Code2\py312\python.exe main.py
 默认监听：
 
 ```text
-http://127.0.0.1:8080/
+http://127.0.0.1:8081/
 ```
 
 指纹浏览器通常会拦截 `127.0.0.1` 或 `localhost`，推荐改用局域网 IP：
 
 ```powershell
-D:\0Code2\py312\python.exe main.py --host 0.0.0.0 --port 8080
+D:\0Code2\py312\python.exe main.py --host 0.0.0.0 --port 8081
 ```
 
 然后在扩展 popup 输入框中保存类似地址：
 
 ```text
-http://192.168.1.15:8080/
+http://192.168.1.15:8081/
 ```
 
 “刷新后端token”会依次请求：
 
 ```text
-http://192.168.1.15:8080/api/get_crc_token
-http://192.168.1.15:8080/api/token/create
+http://192.168.1.15:8081/api/get_crc_token
+http://192.168.1.15:8081/api/token/create
 ```
 
 按钮2会把当前活动页内容发送到：
 
 ```text
-http://192.168.1.15:8080/api/html/text
-http://192.168.1.15:8080/api/html/all
+http://192.168.1.15:8081/api/html/text
+http://192.168.1.15:8081/api/html/all
 ```
 
 其中页面文字写入 `log/html-text-YYYY-MM-DD.jsonl`；完整 HTML 保存到 `db/[token]/[time].html`，不会再写入 `html-all` JSONL。按钮2上传文字超时为 10 秒，上传完整 HTML 超时为 30 秒；其它普通后端请求默认仍是 3 秒超时。
@@ -209,7 +216,7 @@ http://192.168.1.15:8080/api/html/all
 | `POST` | `/api/html/all` | 接收按钮2提取的完整页面 HTML，保存到 `db/[token]/[time].html` |
 | `POST` | `/api/address/from-city` | 保留接口；根据 city/region_name/country 生成地址、kanji/kana 配对姓名，并附带一张 `ctf_toolkit.py` 生成的 Luhn 测试卡 |
 | `POST` | `/api/name/generate` | 根据 JSON-RPC `name.generate` 生成日本测试姓名，返回 kanji、hiragana、romaji、meaning、nameType、gender 等字段 |
-| `POST` | `/api/at/save` | 接收按钮6提取的 ChatGPT accessToken，保存到 `db/[token]/at-YYYY-MM-DD.csv` |
+| `POST` | `/api/at/save` | 接收按钮6或按钮11提取的 ChatGPT accessToken，保存到 `db/[token]/at-YYYY-MM-DD.csv` |
 | `POST` | `/api/log` | 扩展日志上报原始路径 |
 | `POST` | `/api/report` | 扩展日志上报推荐路径，避免部分浏览器拦截 `/api/log` |
 
@@ -219,19 +226,26 @@ http://192.168.1.15:8080/api/html/all
 
 - 使用 Manifest V3。
 - 提供基础 popup 页面。
-- popup 提供后端地址输入框，默认 `http://127.0.0.1:8080/`。
-- popup 提供功能1到功能15，其中：
-  - 功能1：刷新后端 token 并创建 CSV 登录记录和 token 文件夹
+- popup 提供后端地址输入框，默认 `http://127.0.0.1:8081/`。
+- popup 提供功能1到功能20，其中：
+  - 功能1：刷新后端 token 并创建 CSV 登录记录和 token 文件夹；浏览器启动时后台会自动重新执行同一流程
   - 功能2：提取当前活动页的页面文字和完整 HTML
   - 功能3：抓取 IP 信息入口已禁用，原功能代码保留；恢复后可自动打开/刷新 ipinfo.dkly.net 并提取城市和区域信息
   - 功能4：提取地址入口已禁用，原功能代码保留；恢复后可根据按钮3或按钮7返回的城市/区域生成地址、姓名和 Luhn 测试卡
   - 功能5：JS 探针，扫描页面脚本、下载同源 JS chunk，并通过运行时探针记录按钮触发后的调用栈；当前默认围绕名字生成器关键词，可继续扩展其它 JS 方法
-  - 功能6：提取网页 AT，后台打开 ChatGPT session API (`https://chatgpt.com/api/auth/session`)，提取 accessToken，自动保存到后端，并在浮窗中展示 workspace 列表、复制入口和批量导出入口
+  - 功能6“打开网页AT”：后台打开 ChatGPT session API (`https://chatgpt.com/api/auth/session`)，提取 accessToken，自动保存到后端，并在浮窗中展示 workspace 列表、复制入口和批量导出入口
   - 功能7：MayIP 信息，直接请求 mayips.com，提取 country、city、state/region_name；当前继续保留保存到 `lastIpInfo` 的行为，供后续恢复地址链路时使用
   - 功能8：城市检查，复用按钮7/MayIP 返回的 country、city、region_name，查询 AddressGen 区域列表并申请地址，最终通过浮窗展示结果
-  - 功能9-15：预留按钮，当前使用占位点击提示
+  - 功能9：预留按钮，当前使用占位点击提示
+  - 功能10：预留按钮，当前使用占位点击提示
+  - 功能11“提取网页AT”：使用 Side Panel + Service Worker 后台任务；点击后立即打开并激活新标签页，再跳转 Session 页面完成 AT 提取、保存和 workspace 查询；顶部复制按钮固定复制网页 Session AT，Workspace 列表会显示各空间交换得到的 AT 差异片段与指纹，并由行内按钮独立复制；网页 AT 获取成功后顶部复制按钮变绿，空间交换成功后对应行复制按钮变绿；导出 JSON 保留原任务结构，并追加 Codex `auth.json` 的 `auth_mode`、`OPENAI_API_KEY`、`tokens`、`last_refresh` 字段
+  - 功能12-20：预留按钮，当前使用占位点击提示
 - popup 打开时读取当前标签页信息。
 - 后台记录扩展安装、浏览器启动、popup 打开等事件。
+- 浏览器启动后后台等待页面恢复，最多尝试连接后端 3 次；连接成功后重新申请 token、收集全部标签页快照、创建 token CSV，并写回 `settings.backendToken`。
+- 后台自动刷新失败时保留旧 token，并把成功或失败状态写入 `settings.backendAutoRefresh`；Popup 会实时接收 token 存储更新。
+- 如果 `onStartup` 没有触发，首次 `about:blank`、Chrome 新标签页或 Edge 新标签页的 `windows.onFocusChanged` 事件会作为启动兜底，只连接后端并复用已有 token，不生成新 token。
+- 启动信号保存在 `chrome.storage.session` 的 `runtime.browserStartupSignal`，确保同一浏览器会话只处理一次，不会在普通窗口切换时重复连接。
 - popup 显示运行日志面板，包含 URL 跳转记录、刷新 token 请求链路和 IP 信息抓取记录。
 - URL 运行记录支持开启、关闭；主动操作日志始终记录。
 - 运行日志支持复制、导出 JSON 和清空。
@@ -273,7 +287,7 @@ http://192.168.1.15:8080/api/html/all
 
 ## 按钮6浮窗实现方法
 
-按钮6“提取网页AT”的浮窗链路，后续建议始终保持下面这套写法，避免再次出现“控制台有日志但页面看不到浮窗”的问题：
+按钮6“打开网页AT”的浮窗链路，后续建议始终保持下面这套写法，避免再次出现“控制台有日志但页面看不到浮窗”的问题：
 
 1. 先把点击事件里的长流程拆成 helper，不要把“开页、等页、解析、保存、注入、切页”全部堆在一个 `if (featureId === "6")` 里。
 2. 目标页优先后台打开或后台复用，先完成数据提取和 DOM 注入，再执行 `chrome.tabs.update(..., { active: true })` 与 `chrome.windows.update(...)`。
@@ -306,6 +320,60 @@ http://192.168.1.15:8080/api/html/all
 
 ---
 
+## 封版说明（2026-07-19B）
+
+本次围绕“26.7.19B 封版、按钮11 Side Panel 工作流、Workspace AT 和按钮6自动确认链路完善”完成以下更新：
+
+1. `chrome-extension/manifest.json` 的 `version` 保持 `26.7.19`，`version_name` 更新为 `26.7.19B`。
+2. README 当前版本更新为 `26.7.19B`，最后更新日期改为 `2026-07-19B`。
+3. 后台日志构建保持 `url-capture-v25`，Popup 扩展标记更新为 `7.29B`，用于确认 token 成功 3 秒后自动触发按钮6、网页内侧栏和焦点 Popup 确认链路已经加载。
+4. aiohttp、启动脚本和扩展默认后端端口统一由 `8080` 调整为 `8081`；扩展会把旧默认地址 `http://127.0.0.1:8080/` 自动迁移到 `8081`。
+5. popup 功能区扩展到按钮1-20；按钮9继续作为占位入口，按钮12-20保持占位，其中包含新增的按钮16-20。
+6. 按钮6显示文字更新为“打开ipinfo”，入口通过 Side Panel 新建并激活标签页，再跳转 `https://ipinfo.io/explore`；原有 AT 浮窗、Workspace 列表和批量导出代码继续保留，但按钮6不再调用。
+7. 按钮11保持“提取网页AT”文案，采用 Side Panel + Service Worker 架构；Popup 关闭或失焦后，后台任务和面板状态继续保留。
+8. 按钮11启动后会立即新建并激活标签页，再跳转到 ChatGPT Session 页面完成网页 AT 提取、后端保存和 Workspace 查询。
+9. Side Panel 操作区调整为两行：第一行为“刷新AT / 复制AT”，第二行为“打开Session / 导出json”；“刷新AT”通过 `bypassCache: true` 无缓存刷新 Session 页面并重新执行完整流程。
+10. 按钮11导出 JSON 保留原任务字段，同时追加 Codex `auth.json` 兼容字段：`auth_mode`、`OPENAI_API_KEY`、`tokens.id_token`、`tokens.access_token`、`tokens.refresh_token`、`tokens.account_id` 和 `last_refresh`；`refresh_token` 获取失败时输出空字符串。
+11. Workspace 列表为每个空间增加“交换AT”和“复制AT”；交换操作保持目标空间为当前空间，复制操作可以临时获取目标空间 AT 后恢复实际当前空间。
+12. 网页 AT、实际当前 Workspace 和空间交换 AT 分别保存为 `pageAccessToken`、`currentWorkspaceId` 和 `workspaces[].accessToken`，避免空间交换结果覆盖网页 AT。
+13. 顶部“复制AT”只复制网页 Session AT；空间行内“复制AT”只复制该行已保存的 Workspace AT，两条复制链路不再共用同一字段。
+14. Workspace AT 会在对应空间行中加载显示；缩写内容包含与网页 AT 首次不同位置附近的片段和完整值计算出的 8 位指纹，鼠标悬停可查看完整值。
+15. Side Panel 普通按钮统一为蓝色背景和边框；网页 AT 获取成功后顶部“复制AT”变为绿色，只有对应空间“交换AT”成功后，该行“复制AT”才变为绿色。
+16. 按钮11增加 Workspace 操作互斥，防止刷新、交换和复制同时执行；每行显示独立的处理中、成功、提示或失败状态。
+17. 浏览器触发 `chrome.runtime.onStartup` 或当前启动方式触发 `chrome.runtime.onInstalled` 后，后台会等待短暂加载并自动请求 `/api/status`；连接失败时最多重试 3 次，每次间隔 2 秒。
+18. 后端连接成功后，后台按按钮1相同的 JSON-RPC 链路请求 `/api/get_crc_token` 和 `/api/token/create`，收集全部标签页脱敏快照并把新 token 写入 `settings.backendToken`。
+19. 自动刷新过程写入 `settings.backendAutoRefresh`，包含运行中、成功或失败状态；只有完整 token 创建流程成功后才替换旧 token，失败时保留原 token。
+20. Popup 增加对 `settings.backendToken` 的存储监听；浏览器启动自动刷新完成后，即使 Popup 已打开，也会同步使用最新 token。
+21. `windows.onFocusChanged` 现在会额外写入结构化的 `window_focus_changed` 日志，包含窗口、标签页、标题和脱敏 URL。
+22. 如果 `onStartup` 未触发或主流程失败，且窗口焦点事件命中 `about:blank` 或浏览器新标签页，后台会执行启动兜底连接；该路径始终请求 `/api/status`，有旧 token 时继续复用，没有旧 token 时记录为 `missing`，不会请求 `/api/get_crc_token` 或 `/api/token/create`。
+23. 启动主路径和窗口兜底路径通过 `runtime.browserStartupSignal` 协调；只有当前日志构建下 `status: success` 的主流程或兜底结果会阻止后续重复连接，`running`、`error` 和旧构建标记不会提前拦截窗口兜底。
+24. 后端自动连接和窗口兜底的开始、成功、失败、接口地址、尝试次数及 token 状态会同步写入 Popup“运行日志”；后台对 URL 日志和连接日志采用串行写入，避免同时发生时互相覆盖。
+25. 按钮6新增独立的 `button6.pending` / `button6.job` 后台任务，复用按钮11的 Side Panel 生命周期方案；按钮6和按钮11通过 `sidepanel.activeMode` 切换界面，任务状态互不覆盖。
+26. Side Panel 的功能按钮矩阵、页面内容框和任务日志框改为按钮6/11共用区块；按钮6加载完成后提取 IPInfo 页面正文并显示字符数、HTML 大小和截断状态，按钮11在相同区块显示 AT 任务摘要和阶段日志。
+27. 按钮6启动时先扫描全部标签页；已有 `https://ipinfo.io/explore` 时直接激活对应窗口和标签页，并使用 `bypassCache: true` 无缓存刷新，只有不存在目标标签时才新建页面。
+28. 按钮6兼容 IPInfo Explore 当前 `city: "..."`、`country: "..."` 正文格式，并兼容 JSON、标签和值分离的页面结构；国家和城市写入 `button6.job`、Side Panel 详情和任务日志。
+29. Side Panel 在任务阶段文字上方新增与 Popup 一致的 1-20 功能按钮矩阵；按钮6和11直接启动侧栏任务，其余按钮打开 Popup 后自动触发原有功能处理，按钮3和4继续保持禁用保留状态。
+30. Side Panel“任务日志”改为最新记录优先显示，日志框从顶部开始阅读；渲染内容严格限制为最多 3000 字，达到上限时保留最新内容并显示截断提示。
+31. Popup 按钮1或浏览器 `onInstalled` / `onStartup` 自动流程成功申请并保存后端 token 后，后台会固定等待 3000ms，再切换到按钮6模式并触发按钮6任务；随后自动执行 IPInfo 标签复用或新建、无缓存刷新、页面记录以及国家/城市提取流程。
+32. 按钮1在用户点击瞬间按按钮11相同方式先打开浏览器原生 Side Panel，再申请后端 token，并在成功 3000ms 后触发按钮6。
+33. `onInstalled` / `onStartup` 自动任务缺少用户手势、原生 Side Panel 暂时不能打开时，会把 `sidepanel.html` 作为隔离 iframe 恢复到 IPInfo 页面右侧；对应资源仅向 `https://ipinfo.io/*` 暴露。
+34. 自动任务完成后会记录来源窗口、来源标签和任务 ID；当 `windows.onFocusChanged` 再次命中该 IPInfo 标签时，仅创建一个按钮6确认 Popup。用户点击按钮6后使用该点击手势打开原生 Side Panel，移除网页内嵌栏并关闭确认 Popup，不会重复执行已经完成的 IPInfo 自动任务。
+
+封版检查结果：
+
+- `chrome-extension/background.js`、`popup.js`、`button11_worker.js`、`sidepanel.js` JavaScript 语法检查通过。
+- `chrome-extension/manifest.json` JSON 格式检查通过。
+- Side Panel HTML ID 与 JavaScript DOM 引用检查通过。
+- 按钮6模拟测试确认已有 IPInfo 标签页时不会新建标签，激活后执行 `bypassCache: true` 刷新；IPInfo 当前正文、JSON 和标签/值分行样例均可提取国家与城市。
+- 后台自动 token 模拟测试确认 `onInstalled` 成功路径固定等待 3000ms，选择当前聚焦窗口并通过共享按钮6工作器启动 IPInfo 任务。
+- Workspace 模拟测试确认网页 AT 与空间 AT 分字段保存，交换操作更新当前空间，临时复制操作完成后恢复实际当前空间。
+- Workspace AT 差异片段和指纹显示测试通过。
+- 浏览器启动自动刷新模拟测试通过：成功路径按 `/api/status`、`/api/get_crc_token`、`/api/token/create` 顺序执行；失败路径重试 3 次并保留旧 token。
+- 窗口启动兜底模拟测试通过：首次 `about:blank` 焦点事件只请求 `/api/status`、旧 token 保持不变、同一会话后续窗口变化不重复触发；`onStartup` 正常触发时窗口兜底保持关闭。
+- `git diff --check` 检查通过。
+
+---
+
 ## 封版说明（2026-07-05A）
 
 本次围绕“26.7.5A 封版、完成按钮6/按钮8本轮开发”完成以下更新：
@@ -324,7 +392,7 @@ http://192.168.1.15:8080/api/html/all
 - `chrome-extension/background.js`、`chrome-extension/content.js`、`chrome-extension/popup.js` JavaScript 语法检查通过。
 - `chrome-extension/manifest.json` JSON 格式检查通过。
 - `main.py`、`server/app.py`、`server/runner.py`、`ctf_toolkit.py` Python 编译检查通过。
-- 本机 `http://127.0.0.1:8080/api/status` 可正常返回状态 JSON。
+- 本机 `http://127.0.0.1:8081/api/status` 可正常返回状态 JSON。
 
 ---
 
@@ -778,7 +846,7 @@ https://getip.morelogin.com/black_whiteList_stop_page.html
 当前版本日志标题格式：
 
 ```text
-[My Extension v26.7.5A url-capture-v16] url_jump_recorded 2026-...
+[My Extension v26.7.19B url-capture-v25] url_jump_recorded 2026-...
 ```
 
 如果仍然看到旧格式：
@@ -830,6 +898,7 @@ https://getip.morelogin.com/black_whiteList_stop_page.html
 - 监听 `webNavigation`、`webRequest`、`tabs` 事件
 - 将捕获结果写入 `chrome.storage.local`
 - 扩展安装或浏览器启动时尝试向后端发送加载上报
+- 浏览器启动后检查后端状态，并自动重新申请按钮1 token；`onStartup` 缺失时由启动页窗口事件兜底连接并复用旧 token
 
 ### 3) popup 控制层：popup.js
 
@@ -839,10 +908,11 @@ https://getip.morelogin.com/black_whiteList_stop_page.html
 - 功能2提取当前活动页的页面正文文字和完整 HTML，并分别发送到 `/api/html/text` 与 `/api/html/all`
 - 功能4入口当前禁用，但保留地址、Luhn 测试卡和新版日本姓名生成逻辑
 - 功能5为 JS 探针，当前默认围绕名字生成器关键词和随机调用栈，后续可扩展其它 JS 方法
-- 功能6提取 ChatGPT accessToken，展示 workspace 列表，并支持导出 workspace AT JSON 和 `team.csv`
+- 功能6“打开网页AT”提取 ChatGPT accessToken，展示 workspace 列表，并支持导出 workspace AT JSON 和 `team.csv`
 - 功能7抓取 MayIP 信息，写回 `country`、`city`、`region_name`
 - 功能8查询 AddressGen 城市并申请地址，结果通过浮窗展示
-- 功能9到功能15为预留按钮，当前使用占位点击提示
+- 功能9、10 以及功能12到功能20为预留按钮，当前使用占位点击提示
+- 功能11“提取网页AT”通过 Side Panel 提交任务，由 `button11_worker.js` 在 Service Worker 中新建并激活标签页、跳转 Session、提取并保存 AT、查询 workspace；网页 Session AT 与 Workspace 交换 AT 分字段保存，顶部复制按钮只读取网页 AT，空间行内复制按钮只读取该行已加载的交换 AT；空间 AT 使用差异片段和指纹缩写，复制按钮按获取状态显示绿色；切换页面后任务继续运行，无缓存刷新会重新运行完整流程
 - 读取当前活动标签页
 - 输出当前页面标题、URL、域名、tab ID、窗口 ID 等信息
 - 将 popup 打开事件发送给后台日志
@@ -907,13 +977,17 @@ Get-Content -Raw .\chrome-extension\manifest.json | ConvertFrom-Json | Out-Null
 本次会话主要变更集中在：
 
 - `README.md`：项目说明文档
-- `chrome-extension/manifest.json`：版本为 `26.7.5`，展示版本为 `26.7.5A`，包含导航捕获所需权限
-- `chrome-extension/background.js`：负责后台日志、导航捕获、版本输出和加载上报
+- `chrome-extension/manifest.json`：版本为 `26.7.19`，展示版本为 `26.7.19B`，包含导航捕获和 Side Panel 所需权限
+- `chrome-extension/background.js`：负责后台日志、导航捕获、版本输出、加载上报和浏览器启动后的后端 token 自动刷新
+- `chrome-extension/button11_worker.js`：负责按钮11后台任务、Session 提取、AT 保存、Workspace 查询以及空间 AT 交换/恢复
 - `chrome-extension/content.js`：负责页面内 URL 变化采集
-- `chrome-extension/popup.html`：负责 popup 布局、功能1到功能15和运行日志面板
-- `chrome-extension/popup.js`：负责地址配置、功能按钮、运行日志展示、刷新 token、页面内容提取、按钮6 workspace 导出和按钮8城市检查
+- `chrome-extension/popup.html`：负责 popup 布局、功能1到功能20和运行日志面板
+- `chrome-extension/popup.js`：负责地址配置、功能按钮、运行日志展示、刷新 token、页面内容提取、按钮6 workspace 导出、按钮11 Side Panel 任务提交和按钮8城市检查
+- `chrome-extension/sidepanel.html|css|js`：负责按钮11进度、网页/空间 AT 分离复制、JSON 导出、Session 无缓存刷新、Workspace 交换和状态显示
 - `server/app.py`：负责 Dashboard、地址/姓名/卡片生成接口、扩展上报接口、token 生成、CSV 创建接口和页面内容接收接口
+- `server/runner.py`：负责 aiohttp host/port 参数，默认端口为 `8081`
 - `main.py`：负责初始化控制台和文件日志
+- `main.bat`：Windows 启动入口，默认以 `0.0.0.0:8081` 启动后端
 
 如需后续做版本提交，建议先检查：
 

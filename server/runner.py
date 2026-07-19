@@ -13,7 +13,7 @@ LOGGER = logging.getLogger("ctf_dashboard.server.runner")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the aiohttp CTF dashboard.")
     parser.add_argument("--host", default=os.getenv("APP_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("APP_PORT", "8080")))
+    parser.add_argument("--port", type=int, default=int(os.getenv("APP_PORT", "8081")))
     return parser.parse_args()
 
 

@@ -108,6 +108,34 @@
         opacity: 0.85;
       }
 
+      body.button6-prompt-mode {
+        width: 420px;
+        min-height: 0;
+      }
+
+      body.button6-prompt-mode > .panel:not(.prompt-feature-panel) {
+        display: none;
+      }
+
+      body.button6-prompt-mode .prompt-feature-panel {
+        margin-top: 0;
+      }
+
+      body.button6-prompt-mode .feature-button:not(.is-prompt-target) {
+        opacity: 0.45;
+      }
+
+      body.button6-prompt-mode .feature-button.is-prompt-target {
+        border: 2px solid #0f4f9c;
+        background: #1769c2;
+        color: #fff;
+        box-shadow: 0 0 0 3px rgba(23, 105, 194, 0.2);
+      }
+
+      body.button6-prompt-mode .feature-button.is-prompt-target:hover {
+        background: #0f5cae;
+      }
+
       .message {
         margin: 0;
         color: #444;
@@ -174,7 +202,7 @@
     <section class="panel">
       <label class="label" for="backend-base-url">前后端交互地址</label>
       <div class="row">
-        <input id="backend-base-url" type="text" value="http://127.0.0.1:8080/" spellcheck="false">
+        <input id="backend-base-url" type="text" value="http://127.0.0.1:8081/" spellcheck="false">
         <button class="save-button" id="save-backend-url" type="button">保存</button>
       </div>
       <div class="status" id="save-status">首次加载时会自动写入默认值。</div>
@@ -188,16 +216,21 @@
         <button class="feature-button" data-feature="3" type="button" disabled title="已计划弃用，功能代码暂时保留">抓取IP信息</button>
         <button class="feature-button" data-feature="4" type="button" disabled title="已计划弃用，功能代码暂时保留">提取地址</button>
         <button class="feature-button" data-feature="5" type="button">JS探针</button>
-        <button class="feature-button" data-feature="6" type="button">提取网页AT</button>
+        <button class="feature-button" data-feature="6" type="button" title="打开 https://ipinfo.io/explore">打开ipinfo</button>
         <button class="feature-button" data-feature="7" type="button">MayIP信息</button>
         <button class="feature-button" data-feature="8" type="button">城市检查</button>
         <button class="feature-button" data-feature="9" type="button">功能9</button>
         <button class="feature-button" data-feature="10" type="button">功能10</button>
-        <button class="feature-button" data-feature="11" type="button">功能11</button>
+        <button class="feature-button" data-feature="11" type="button">提取网页AT</button>
         <button class="feature-button" data-feature="12" type="button">功能12</button>
         <button class="feature-button" data-feature="13" type="button">功能13</button>
         <button class="feature-button" data-feature="14" type="button">功能14</button>
         <button class="feature-button" data-feature="15" type="button">功能15</button>
+        <button class="feature-button" data-feature="16" type="button">功能16</button>
+        <button class="feature-button" data-feature="17" type="button">功能17</button>
+        <button class="feature-button" data-feature="18" type="button">功能18</button>
+        <button class="feature-button" data-feature="19" type="button">功能19</button>
+        <button class="feature-button" data-feature="20" type="button">功能20</button>
       </div>
     </section>
 
