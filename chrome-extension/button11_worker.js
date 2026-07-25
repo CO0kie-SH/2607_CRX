@@ -2,12 +2,17 @@
   const JOB_STORAGE_KEY = "button11.job";
   const SESSION_TARGET_URL = "https://chatgpt.com/api/auth/session";
   const WORKSPACE_TARGET_URL = "https://chatgpt.com/backend-api/accounts";
+  const AUTHAPI_BASE_URL = "https://auth.openai.com/api/accounts";
+  const AGENT_VERSION = "0.138.0-alpha.6";
+  const AGENT_HARNESS_ID = "codex-cli";
+  const AGENT_RUNNING_LOCATION = "local";
   const TOKEN_PATTERN = /^crx-[0-9a-f]{32}$/i;
   const SESSION_TIMEOUT_MS = 20000;
   const REQUEST_TIMEOUT_MS = 15000;
   const MAX_JOB_LOGS = 100;
   let activeJobPromise = null;
   let activeWorkspacePromise = null;
+  let activeAuthPromise = null;
 
   const nowIso = () => new Date().toISOString();
   const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -196,26 +201,352 @@
     return JSON.parse(jsonText);
   }
 
+  function decodeJwtClaims(accessToken) {
+    const parts = String(accessToken || "").split(".");
+    if (parts.length !== 3) {
+      throw new Error("Access Token 不是有效的 JWT 格式。");
+    }
+    return decodeBase64UrlJson(parts[1]);
+  }
+
   function decodeAccessTokenClaims(accessToken) {
     try {
-      const parts = String(accessToken || "").split(".");
-      if (parts.length < 2) {
-        return {};
-      }
-      const claims = decodeBase64UrlJson(parts[1]);
+      const claims = decodeJwtClaims(accessToken);
       const profile = claims?.["https://api.openai.com/profile"] || {};
       const auth = claims?.["https://api.openai.com/auth"] || {};
       return {
         email: typeof profile.email === "string" ? profile.email.trim() : "",
         planType: typeof auth.chatgpt_plan_type === "string" ? auth.chatgpt_plan_type.trim() : "",
-        accountId: typeof auth.chatgpt_account_id === "string" ? auth.chatgpt_account_id.trim() : ""
+        accountId: typeof auth.chatgpt_account_id === "string" ? auth.chatgpt_account_id.trim() : "",
+        userId: typeof auth.chatgpt_user_id === "string" ? auth.chatgpt_user_id.trim() : ""
       };
     } catch (_error) {
       return {};
     }
   }
 
-  async function requestJsonRpc(targetUrl, method, params) {
+  function bytesToBase64(value) {
+    const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+    }
+    return btoa(binary);
+  }
+
+  function buildSshEd25519PublicKey(rawPublicKey) {
+    const algorithmName = new TextEncoder().encode("ssh-ed25519");
+    const publicKey = rawPublicKey instanceof Uint8Array ? rawPublicKey : new Uint8Array(rawPublicKey);
+    const blob = new Uint8Array(4 + algorithmName.length + 4 + publicKey.length);
+    const view = new DataView(blob.buffer);
+    let offset = 0;
+
+    view.setUint32(offset, algorithmName.length, false);
+    offset += 4;
+    blob.set(algorithmName, offset);
+    offset += algorithmName.length;
+    view.setUint32(offset, publicKey.length, false);
+    offset += 4;
+    blob.set(publicKey, offset);
+
+    return `ssh-ed25519 ${bytesToBase64(blob)}`;
+  }
+
+  async function generateEd25519Keypair() {
+    if (!globalThis.crypto?.subtle) {
+      throw new Error("当前浏览器不支持 Web Crypto。");
+    }
+
+    let keyPair = null;
+    try {
+      keyPair = await globalThis.crypto.subtle.generateKey(
+        { name: "Ed25519" },
+        true,
+        ["sign", "verify"]
+      );
+    } catch (error) {
+      throw new Error(`当前浏览器不支持 Ed25519：${error.message || String(error)}`);
+    }
+
+    const [privateKeyPkcs8, publicKeyRaw] = await Promise.all([
+      globalThis.crypto.subtle.exportKey("pkcs8", keyPair.privateKey),
+      globalThis.crypto.subtle.exportKey("raw", keyPair.publicKey)
+    ]);
+
+    return {
+      privateKey: keyPair.privateKey,
+      privateKeyBase64: bytesToBase64(privateKeyPkcs8),
+      publicKeySsh: buildSshEd25519PublicKey(publicKeyRaw)
+    };
+  }
+
+  async function parseAuthApiResponse(response, operationName) {
+    const responseText = await response.text();
+    let data = null;
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch (error) {
+      throw new Error(`${operationName}响应解析失败：${error.message || String(error)}`);
+    }
+
+    if (!response.ok) {
+      const details = firstString(data?.error, data?.message, data?.detail, response.statusText);
+      throw new Error(`${operationName}失败：HTTP ${response.status}${details ? ` ${details}` : ""}`);
+    }
+    return data;
+  }
+
+  async function registerAuthAgent(accessToken, publicKeySsh) {
+    const response = await fetchWithTimeout(`${AUTHAPI_BASE_URL}/v1/agent/register`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        abom: {
+          agent_version: AGENT_VERSION,
+          agent_harness_id: AGENT_HARNESS_ID,
+          running_location: AGENT_RUNNING_LOCATION
+        },
+        agent_public_key: publicKeySsh
+      })
+    }, REQUEST_TIMEOUT_MS);
+    const data = await parseAuthApiResponse(response, "Agent 注册");
+    const agentRuntimeId = firstString(data?.agent_runtime_id);
+    if (!agentRuntimeId) {
+      throw new Error("Agent 注册响应缺少 agent_runtime_id。");
+    }
+    return agentRuntimeId;
+  }
+
+  async function registerAuthTask(accessToken, agentRuntimeId, privateKey) {
+    const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    const payload = new TextEncoder().encode(`${agentRuntimeId}:${timestamp}`);
+    const signature = await globalThis.crypto.subtle.sign(
+      { name: "Ed25519" },
+      privateKey,
+      payload
+    );
+    const response = await fetchWithTimeout(
+      `${AUTHAPI_BASE_URL}/v1/agent/${encodeURIComponent(agentRuntimeId)}/task/register`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          timestamp,
+          signature: bytesToBase64(signature)
+        })
+      },
+      REQUEST_TIMEOUT_MS
+    );
+    const data = await parseAuthApiResponse(response, "Task 注册");
+    return firstString(data?.encrypted_task_id);
+  }
+
+  function buildAgentIdentityAuthJson(agentRuntimeId, privateKeyBase64, accountInfo) {
+    return {
+      auth_mode: "agent_identity",
+      agent_identity: {
+        agent_runtime_id: agentRuntimeId,
+        agent_private_key: privateKeyBase64,
+        account_id: accountInfo.accountId,
+        chatgpt_user_id: accountInfo.userId,
+        email: accountInfo.email,
+        plan_type: accountInfo.planType,
+        chatgpt_account_is_fedramp: false
+      }
+    };
+  }
+
+  async function runAuthExport() {
+    const job = await readJob();
+    const accessToken = firstString(job?.pageAccessToken, job?.accessToken);
+    if (!accessToken) {
+      throw new Error("请先完成按钮11的网页 AT 获取任务。");
+    }
+
+    const claims = decodeJwtClaims(accessToken);
+    const authClaims = claims?.["https://api.openai.com/auth"] || {};
+    const profileClaims = claims?.["https://api.openai.com/profile"] || {};
+    const accountInfo = {
+      accountId: firstString(authClaims.chatgpt_account_id, job?.accountId),
+      userId: firstString(authClaims.chatgpt_user_id, job?.userId),
+      email: firstString(profileClaims.email, job?.userEmail),
+      planType: firstString(authClaims.chatgpt_plan_type, job?.planType) || "free"
+    };
+    if (!accountInfo.accountId || !accountInfo.userId) {
+      throw new Error("网页 AT 缺少 account_id 或 user_id。");
+    }
+
+    const priorStatus = job?.status || "success";
+    const priorPhase = job?.phase || "completed";
+    const priorMessage = job?.message || "任务完成。";
+    await updateJob({
+      status: "running",
+      phase: "generating_auth_key",
+      message: "正在生成 AUTH 密钥...",
+      authExport: {
+        status: "running",
+        startedAt: nowIso()
+      }
+    }, createLog("开始生成 Ed25519 AUTH 密钥。"));
+
+    try {
+      const keyPair = await generateEd25519Keypair();
+      await updateJob({
+        phase: "registering_auth_agent",
+        message: "正在注册 Codex Agent..."
+      }, createLog("Ed25519 密钥已生成，开始注册 Codex Agent。"));
+
+      const agentRuntimeId = await registerAuthAgent(accessToken, keyPair.publicKeySsh);
+      await updateJob({
+        phase: "verifying_auth_task",
+        message: "Agent 已注册，正在验证 Task..."
+      }, createLog(`Agent 已注册：${agentRuntimeId}。`, "success"));
+
+      let taskId = "";
+      let taskError = "";
+      try {
+        taskId = await registerAuthTask(accessToken, agentRuntimeId, keyPair.privateKey);
+      } catch (error) {
+        taskError = error.message || String(error);
+      }
+
+      const authJson = buildAgentIdentityAuthJson(
+        agentRuntimeId,
+        keyPair.privateKeyBase64,
+        accountInfo
+      );
+      const exportedAt = nowIso();
+      await updateJob({
+        status: priorStatus,
+        phase: priorPhase,
+        message: priorMessage,
+        authExport: {
+          status: taskError ? "warning" : "success",
+          agentRuntimeId,
+          taskId,
+          taskError,
+          exportedAt
+        }
+      }, createLog(
+        taskError
+          ? `AUTH 已生成，Task 验证提示：${taskError}`
+          : "AUTH 已生成并通过 Task 验证。",
+        taskError ? "warning" : "success"
+      ));
+
+      return {
+        ok: true,
+        authJson,
+        agentRuntimeId,
+        taskId,
+        taskError,
+        exportedAt
+      };
+    } catch (error) {
+      const errorMessage = error.message || String(error);
+      await updateJob({
+        status: priorStatus,
+        phase: priorPhase,
+        message: priorMessage,
+        authExport: {
+          status: "error",
+          error: errorMessage,
+          completedAt: nowIso()
+        }
+      }, createLog(`AUTH 生成失败：${errorMessage}`, "error"));
+      throw error;
+    }
+  }
+
+  async function runSub2apiImport(payload = {}) {
+    const authResult = await runAuthExport();
+    const job = await readJob();
+    const backendBaseUrl = normalizeBackendBaseUrl(job?.backendBaseUrl);
+    const token = String(job?.token || "").trim();
+    const sub2apiUrl = firstString(payload?.sub2apiUrl, payload?.sub2api_url) || "auto";
+    if (!TOKEN_PATTERN.test(token)) {
+      throw new Error("请先在 Popup 中刷新后端 token。");
+    }
+
+    const priorStatus = job?.status || "success";
+    const priorPhase = job?.phase || "completed";
+    const priorMessage = job?.message || "任务完成。";
+    await updateJob({
+      status: "running",
+      phase: "importing_sub2api",
+      message: "AUTH 已生成，正在导入 Sub2API...",
+      sub2apiImport: {
+        status: "running",
+        sub2apiUrl,
+        startedAt: nowIso()
+      }
+    }, createLog(`开始导入 Sub2API，地址模式：${sub2apiUrl}。`));
+
+    try {
+      const targetUrl = new URL("api/sub2api/import", backendBaseUrl).toString();
+      const result = await requestJsonRpc(
+        targetUrl,
+        "sub2api.import",
+        {
+          token,
+          sub2api_url: sub2apiUrl,
+          auth_json: JSON.stringify(authResult.authJson, null, 2)
+        },
+        70000
+      );
+      const accountId = result?.account_id ?? result?.id;
+      if (accountId === undefined || accountId === null || accountId === "") {
+        throw new Error("Sub2API 导入响应缺少账号 ID。");
+      }
+
+      const importedAt = result?.imported_at || nowIso();
+      await updateJob({
+        status: priorStatus,
+        phase: priorPhase,
+        message: priorMessage,
+        sub2apiImport: {
+          status: "success",
+          accountId,
+          name: result?.name || "",
+          action: result?.action || "",
+          sub2apiUrl: result?.sub2api_url || sub2apiUrl,
+          importedAt
+        }
+      }, createLog(`Sub2API 导入完成，账号 ID：${accountId}。`, "success"));
+
+      return {
+        ok: true,
+        accountId,
+        name: result?.name || "",
+        action: result?.action || "",
+        sub2apiUrl: result?.sub2api_url || sub2apiUrl,
+        importedAt,
+        authTaskError: authResult.taskError || ""
+      };
+    } catch (error) {
+      const errorMessage = error.message || String(error);
+      await updateJob({
+        status: priorStatus,
+        phase: priorPhase,
+        message: priorMessage,
+        sub2apiImport: {
+          status: "error",
+          sub2apiUrl,
+          error: errorMessage,
+          completedAt: nowIso()
+        }
+      }, createLog(`Sub2API 导入失败：${errorMessage}`, "error"));
+      throw error;
+    }
+  }
+
+  async function requestJsonRpc(targetUrl, method, params, timeoutMs = 8000) {
     const rpcId = Date.now() * 1000000 + Math.floor(Math.random() * 1000000);
     const response = await fetchWithTimeout(targetUrl, {
       method: "POST",
@@ -226,7 +557,7 @@
         params,
         id: rpcId
       })
-    }, 8000);
+    }, timeoutMs);
     const responseText = await response.text();
     let payload = null;
 
@@ -816,7 +1147,7 @@
     }
 
     if (message?.type === "BUTTON11_WORKSPACE_ACTION") {
-      if (activeJobPromise || activeWorkspacePromise) {
+      if (activeJobPromise || activeWorkspacePromise || activeAuthPromise) {
         sendResponse({ ok: false, error: "按钮11任务正在运行。" });
         return true;
       }
@@ -831,11 +1162,43 @@
       return true;
     }
 
+    if (message?.type === "BUTTON11_EXPORT_AUTH") {
+      if (activeJobPromise || activeWorkspacePromise || activeAuthPromise) {
+        sendResponse({ ok: false, error: "按钮11任务正在运行。" });
+        return true;
+      }
+
+      activeAuthPromise = runAuthExport();
+      activeAuthPromise
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }))
+        .finally(() => {
+          activeAuthPromise = null;
+        });
+      return true;
+    }
+
+    if (message?.type === "BUTTON11_IMPORT_SUB2API") {
+      if (activeJobPromise || activeWorkspacePromise || activeAuthPromise) {
+        sendResponse({ ok: false, error: "按钮11任务正在运行。" });
+        return true;
+      }
+
+      activeAuthPromise = runSub2apiImport(message.payload || {});
+      activeAuthPromise
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }))
+        .finally(() => {
+          activeAuthPromise = null;
+        });
+      return true;
+    }
+
     if (message?.type !== "BUTTON11_START" && message?.type !== "BUTTON11_REFRESH") {
       return false;
     }
 
-    if (activeJobPromise || activeWorkspacePromise) {
+    if (activeJobPromise || activeWorkspacePromise || activeAuthPromise) {
       sendResponse({ ok: false, error: "按钮11任务正在运行。" });
       return true;
     }

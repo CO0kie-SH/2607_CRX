@@ -9,6 +9,7 @@ from datetime import datetime
 from datetime import timezone
 import importlib.util
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -18,6 +19,7 @@ STATIC_DIR = BASE_DIR / "static"
 LOG_DIR = BASE_DIR / "log"
 DB_DIR = BASE_DIR / "db"
 CTF_TOOLKIT_PATH = BASE_DIR / "ctf_toolkit.py"
+SUB2API_CONFIG_PATH = BASE_DIR / "auth" / "sub2api.json"
 DEFAULT_ADDRESS_PROXY = os.getenv("CTF_ADDRESS_PROXY", "127.0.0.1:7897")
 LOGGER = logging.getLogger("ctf_dashboard.server.app")
 TOKEN_PATTERN = re.compile(r"^crx-[0-9a-fA-F]{32}$")
@@ -407,6 +409,324 @@ async def api_at_save(request: web.Request) -> web.Response:
         return json_response_with_cors(build_jsonrpc_response(result, rpc_id))
 
     return json_response_with_cors(result)
+
+
+def load_sub2api_config(path: Path = SUB2API_CONFIG_PATH) -> dict:
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"Sub2API config not found: {display_path(path)}")
+
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid Sub2API config JSON: {error}") from error
+
+    if not isinstance(config, dict):
+        raise ValueError("Sub2API config root must be an object.")
+
+    sub2api = dict(config.get("sub2api") or {})
+    import_config = dict(config.get("import") or {})
+    missing = [
+        key
+        for key, value in (
+            ("sub2api.base", sub2api.get("base")),
+            ("sub2api.email", sub2api.get("email")),
+            ("sub2api.password", sub2api.get("password")),
+            ("import.group_ids", import_config.get("group_ids")),
+        )
+        if not value
+    ]
+    if missing:
+        raise ValueError(f"Sub2API config missing: {', '.join(missing)}")
+
+    import_config.setdefault("name", "auth-{plan}-{email}")
+    import_config.setdefault("notes", None)
+    import_config.setdefault("proxy_id", None)
+    import_config.setdefault("concurrency", 10)
+    import_config.setdefault("priority", 1)
+    import_config.setdefault("rate_multiplier", 1)
+    import_config.setdefault("expires_at", None)
+    import_config.setdefault("auto_pause_on_expired", True)
+    import_config.setdefault("update_existing", True)
+    import_config.setdefault("model_mapping", None)
+    import_config.setdefault("extra", {})
+
+    return {
+        **config,
+        "sub2api": sub2api,
+        "import": import_config,
+    }
+
+
+def normalize_sub2api_url(requested_url: str, configured_url: str) -> str:
+    raw_value = str(requested_url or "auto").strip() or "auto"
+    target_url = configured_url if raw_value.lower() == "auto" else raw_value
+    parsed = urlsplit(str(target_url).strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("sub2api_url must be auto or a valid HTTP(S) URL.")
+    return str(target_url).strip().rstrip("/")
+
+
+def parse_agent_identity_auth_json(auth_json_text: str) -> dict:
+    if not isinstance(auth_json_text, str) or not auth_json_text.strip():
+        raise ValueError("auth_json must be a non-empty JSON string.")
+
+    try:
+        auth_json = json.loads(auth_json_text)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"auth_json is invalid JSON: {error}") from error
+
+    if not isinstance(auth_json, dict) or auth_json.get("auth_mode") != "agent_identity":
+        raise ValueError("auth_json.auth_mode must be agent_identity.")
+
+    identity = auth_json.get("agent_identity")
+    if not isinstance(identity, dict):
+        raise ValueError("auth_json.agent_identity must be an object.")
+
+    required_fields = (
+        "agent_runtime_id",
+        "agent_private_key",
+        "account_id",
+        "chatgpt_user_id",
+    )
+    missing = [field for field in required_fields if not str(identity.get(field) or "").strip()]
+    if missing:
+        raise ValueError(f"auth_json.agent_identity missing: {', '.join(missing)}")
+    return auth_json
+
+
+def normalize_sub2api_plan(plan: str) -> str:
+    normalized = str(plan or "free").strip().lower()
+    aliases = {
+        "chatgptplus": "plus",
+        "chatgpt_plus": "plus",
+        "chatgptpro": "pro",
+        "chatgpt_pro": "pro",
+        "free_plan": "free",
+    }
+    return aliases.get(normalized, normalized) or "free"
+
+
+def resolve_sub2api_import_name(template: str, auth_json: dict) -> str:
+    identity = auth_json.get("agent_identity") or {}
+    email = str(identity.get("email") or "unknown")
+    plan = normalize_sub2api_plan(identity.get("plan_type") or "free")
+    account_id = str(identity.get("account_id") or "")[:8]
+    name = str(template or "auth-{plan}-{email}").strip() or "auth-{plan}-{email}"
+
+    if name in {"auth-free", "auth-free-{email}", "auth-free-{plan}-{email}"}:
+        name = "auth-{plan}-{email}"
+    elif "{plan}" not in name:
+        name = re.sub(
+            r"^(auth-)free(-|$)",
+            lambda match: f"{match.group(1)}{plan}{match.group(2)}",
+            name,
+            flags=re.IGNORECASE,
+        )
+
+    return (
+        name.replace("{email}", email)
+        .replace("{plan}", plan)
+        .replace("{account_id}", account_id)
+    )
+
+
+def build_sub2api_import_payload(auth_json: dict, import_config: dict) -> dict:
+    payload = {
+        "content": json.dumps(auth_json, indent=2, ensure_ascii=False),
+        "name": resolve_sub2api_import_name(import_config.get("name"), auth_json),
+        "notes": import_config.get("notes"),
+        "proxy_id": import_config.get("proxy_id"),
+        "concurrency": import_config.get("concurrency", 10),
+        "priority": import_config.get("priority", 1),
+        "rate_multiplier": import_config.get("rate_multiplier", 1),
+        "group_ids": list(import_config.get("group_ids") or []),
+        "expires_at": import_config.get("expires_at"),
+        "auto_pause_on_expired": bool(import_config.get("auto_pause_on_expired", True)),
+        "extra": dict(import_config.get("extra") or {}),
+        "update_existing": bool(import_config.get("update_existing", True)),
+    }
+    model_mapping = import_config.get("model_mapping")
+    if model_mapping:
+        payload["credential_extras"] = {"model_mapping": dict(model_mapping)}
+    return payload
+
+
+def parse_sub2api_response(response, operation_name: str) -> dict:
+    try:
+        body = response.json()
+    except Exception as error:
+        response_text = str(getattr(response, "text", ""))[:300]
+        raise RuntimeError(f"{operation_name} response is not JSON: {response_text}") from error
+
+    if response.status_code != 200:
+        raise RuntimeError(f"{operation_name} HTTP {response.status_code}: {str(body)[:500]}")
+    if isinstance(body, dict) and body.get("code") not in (0, None, 200):
+        raise RuntimeError(f"{operation_name} failed: {str(body)[:500]}")
+    if not isinstance(body, dict):
+        raise RuntimeError(f"{operation_name} response must be an object.")
+    return body
+
+
+def perform_sub2api_import_sync(config: dict, base_url: str, auth_json: dict) -> dict:
+    from curl_cffi import requests as curl_requests
+
+    sub2api = config["sub2api"]
+    import_config = config["import"]
+    impersonate = str(config.get("impersonate") or "chrome")
+    session = curl_requests.Session(impersonate=impersonate)
+
+    try:
+        login_response = session.post(
+            f"{base_url}/api/v1/auth/login",
+            headers={
+                "Content-Type": "application/json",
+                "Origin": base_url,
+                "Referer": f"{base_url}/",
+            },
+            json={
+                "email": sub2api["email"],
+                "password": sub2api["password"],
+            },
+            timeout=30,
+        )
+        login_body = parse_sub2api_response(login_response, "Sub2API login")
+        login_data = login_body.get("data") or login_body
+        api_token = login_data.get("access_token") or login_data.get("token")
+        if not api_token:
+            raise RuntimeError("Sub2API login response missing token.")
+
+        import_payload = build_sub2api_import_payload(auth_json, import_config)
+        import_response = session.post(
+            f"{base_url}/api/v1/admin/accounts/import/codex-session",
+            headers={
+                "Authorization": f"Bearer {api_token}",
+                "Content-Type": "application/json",
+                "Origin": base_url,
+                "Referer": f"{base_url}/admin/accounts",
+            },
+            json=import_payload,
+            timeout=60,
+        )
+        import_body = parse_sub2api_response(import_response, "Sub2API import")
+    finally:
+        session.close()
+
+    data = import_body.get("data") or {}
+    items = data.get("items") or []
+    first_item = items[0] if items and isinstance(items[0], dict) else {}
+    account_id = first_item.get("account_id") or first_item.get("id") or data.get("account_id")
+    if account_id is None:
+        raise RuntimeError("Sub2API import response missing account id.")
+
+    return {
+        "id": account_id,
+        "account_id": account_id,
+        "name": first_item.get("name") or import_payload["name"],
+        "action": first_item.get("action") or "",
+        "sub2api_url": base_url,
+        "total": data.get("total"),
+        "created": data.get("created"),
+        "updated": data.get("updated"),
+        "failed": data.get("failed"),
+        "warnings": data.get("warnings") or [],
+    }
+
+
+async def api_sub2api_import(request: web.Request) -> web.Response:
+    if request.content_type != "application/json":
+        return json_response_with_cors(
+            build_jsonrpc_error(-32600, "Content-Type must be application/json.", None),
+            status=415,
+        )
+
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        return json_response_with_cors(
+            build_jsonrpc_error(-32700, "Invalid JSON body.", None),
+            status=400,
+        )
+
+    if not isinstance(payload, dict) or not is_jsonrpc_request(payload):
+        return json_response_with_cors(
+            build_jsonrpc_error(-32600, "JSON-RPC 2.0 request is required.", payload.get("id") if isinstance(payload, dict) else None),
+            status=400,
+        )
+
+    rpc_id = payload.get("id")
+    if payload.get("method") != "sub2api.import":
+        return json_response_with_cors(
+            build_jsonrpc_error(-32601, "Method not found.", rpc_id),
+            status=404,
+        )
+
+    params = payload.get("params")
+    if not isinstance(params, dict):
+        return json_response_with_cors(
+            build_jsonrpc_error(-32602, "Invalid params: must be an object.", rpc_id),
+            status=400,
+        )
+
+    token = str(params.get("token") or "").strip()
+    if not is_valid_token(token):
+        return json_response_with_cors(
+            build_jsonrpc_error(-32602, "Valid token is required.", rpc_id),
+            status=400,
+        )
+
+    try:
+        auth_json = parse_agent_identity_auth_json(params.get("auth_json"))
+    except ValueError as error:
+        return json_response_with_cors(
+            build_jsonrpc_error(-32602, str(error), rpc_id),
+            status=400,
+        )
+
+    try:
+        config = load_sub2api_config()
+    except (FileNotFoundError, ValueError) as error:
+        return json_response_with_cors(
+            build_jsonrpc_error(-32000, str(error), rpc_id),
+            status=500,
+        )
+
+    requested_url = str(params.get("sub2api_url") or "auto").strip() or "auto"
+    try:
+        base_url = normalize_sub2api_url(requested_url, config["sub2api"]["base"])
+    except ValueError as error:
+        return json_response_with_cors(
+            build_jsonrpc_error(-32602, str(error), rpc_id),
+            status=400,
+        )
+
+    try:
+        result = await asyncio.to_thread(
+            perform_sub2api_import_sync,
+            config,
+            base_url,
+            auth_json,
+        )
+    except Exception as error:
+        LOGGER.exception("Sub2API import failed. token=%s url=%s", token, base_url)
+        return json_response_with_cors(
+            build_jsonrpc_error(-32001, f"Sub2API import failed: {error}", rpc_id),
+            status=502,
+        )
+
+    result.update({
+        "ok": True,
+        "token": token,
+        "rpc_id": rpc_id,
+        "imported_at": utc_iso_now(),
+    })
+    LOGGER.info(
+        "Sub2API account imported. token=%s url=%s account_id=%s action=%s",
+        token,
+        base_url,
+        result.get("account_id"),
+        result.get("action"),
+    )
+    return json_response_with_cors(build_jsonrpc_response(result, rpc_id))
 
 
 async def api_log(request: web.Request) -> web.Response:
@@ -1214,6 +1534,8 @@ def create_app() -> web.Application:
     app.router.add_post("/api/name/generate", api_name_generate)
     app.router.add_options("/api/at/save", api_log_options)
     app.router.add_post("/api/at/save", api_at_save)
+    app.router.add_options("/api/sub2api/import", api_log_options)
+    app.router.add_post("/api/sub2api/import", api_sub2api_import)
     app.router.add_options("/api/log", api_log_options)
     app.router.add_post("/api/log", api_log)
     app.router.add_options("/api/report", api_log_options)

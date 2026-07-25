@@ -12,7 +12,7 @@ const urlLoggerExportButton = document.getElementById("url-logger-export");
 const urlLoggerClearButton = document.getElementById("url-logger-clear");
 const popupTitleElement = document.querySelector("h1");
 const REDACTED_VALUE = "[REDACTED]";
-const POPUP_BUILD = "7.29B";
+const POPUP_BUILD = "7.22A";
 const DEFAULT_BACKEND_BASE_URL = "http://127.0.0.1:8081/";
 const LEGACY_BACKEND_BASE_URL = "http://127.0.0.1:8080/";
 const DEFAULT_REQUEST_TIMEOUT_MS = 3000;
@@ -46,6 +46,7 @@ const SIDEPANEL_PENDING_FEATURE_STORAGE_KEY = "sidepanel.pendingFeature";
 const BUTTON6_NATIVE_PANEL_PENDING_STORAGE_KEY = "button6.nativePanelPending";
 const BUTTON6_SOURCE_WINDOW_STORAGE_KEY = "button6.sourceWindowId";
 const BUTTON6_TARGET_URL = "https://ipinfo.io/explore";
+const CHATGPT_LOGIN_TARGET_URL = "https://chatgpt.com/auth/login";
 const URL_LOGGER_SETTINGS_KEY = "urlLogger.settings";
 const URL_LOGGER_LOGS_KEY = "urlLogger.global.logs";
 const MAX_RUNTIME_LOGS = 300;
@@ -636,6 +637,7 @@ function formatRuntimeLogEntry(entry, index, total) {
     const panelModeLabels = {
       side_panel: "浏览器 Side Panel",
       embedded: "网页内侧栏",
+      navigation_pending: "目标页定向后等待确认",
       native_pending: "等待点击打开原生侧栏",
       right_window: "旧版右侧功能窗口",
       error: "打开失败"
@@ -4752,6 +4754,21 @@ function startButton11SidePanelCapture() {
   }));
 }
 
+async function openChatGptLoginPage() {
+  const response = await chrome.runtime.sendMessage({
+    type: "OPEN_CHATGPT_LOGIN_PAGE",
+    payload: {
+      tabId: popupState.currentPageTab?.id,
+      windowId: popupState.currentPageTab?.windowId,
+      requestedAt: new Date().toISOString()
+    }
+  });
+  if (!response?.ok) {
+    throw new Error(response?.error || "GPT 登录页打开失败。");
+  }
+  return response;
+}
+
 function bindPopupActions() {
   saveBackendUrlButton.addEventListener("click", () => {
     void saveBackendBaseUrl();
@@ -4796,7 +4813,7 @@ function bindPopupActions() {
           button.disabled = true;
           button.textContent = "刷新中...";
           const result = await refreshBackendToken();
-          button.textContent = "等待3秒...";
+          button.textContent = "等待0.1秒...";
           const nativePanelResult = await nativePanelPromise;
           const button6Result = await triggerButton6AfterBackendToken();
           const panelStatus = nativePanelResult.ok ? "原生侧栏已打开" : "原生侧栏等待再次点击";
@@ -5077,6 +5094,35 @@ function bindPopupActions() {
         return;
       }
 
+      if (featureId === "16") {
+        const originalText = button.textContent;
+
+        try {
+          button.disabled = true;
+          button.textContent = "打开中...";
+          const result = await openChatGptLoginPage();
+          const modeText = result.mode === "current_tab"
+            ? "已在当前空白页打开"
+            : result.mode === "reuse"
+              ? "已切换到现有登录页"
+              : "已新建登录页";
+          setSaveStatus(`${modeText}：${CHATGPT_LOGIN_TARGET_URL}`);
+          logEvent("feature_button_clicked", {
+            featureId,
+            targetUrl: CHATGPT_LOGIN_TARGET_URL,
+            mode: result.mode,
+            tabId: result.tabId
+          });
+        } catch (error) {
+          setSaveStatus(error.message || "GPT 登录页打开失败。", true);
+          console.error(error);
+        } finally {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+        return;
+      }
+
       if (featureId === "7") {
         const originalText = button.textContent;
 
@@ -5212,7 +5258,10 @@ async function resolvePopupCurrentPageTab() {
     ) {
       throw new Error("按钮6 Popup 来源窗口已变化。");
     }
-    if (!String(sourceTab.url || sourceTab.pendingUrl || "").startsWith(BUTTON6_TARGET_URL)) {
+    if (
+      !String(sourceTab.url || "").startsWith(BUTTON6_TARGET_URL)
+      && !String(sourceTab.pendingUrl || "").startsWith(BUTTON6_TARGET_URL)
+    ) {
       throw new Error("按钮6 Popup 来源页已离开 IPInfo。");
     }
     return sourceTab;

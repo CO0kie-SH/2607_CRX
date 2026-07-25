@@ -31,6 +31,8 @@ const elements = {
   tokenPreview: document.getElementById("token-preview"),
   copyToken: document.getElementById("copy-token"),
   exportResult: document.getElementById("export-result"),
+  exportAuth: document.getElementById("export-auth"),
+  importSub2api: document.getElementById("import-sub2api"),
   openSession: document.getElementById("open-session"),
   refreshJob: document.getElementById("refresh-job"),
   errorSection: document.getElementById("error-section"),
@@ -77,6 +79,10 @@ const phaseLabels = {
   saving: "保存 AT",
   fetching_workspaces: "查询 Workspace",
   exchanging_workspace: "切换 Workspace",
+  generating_auth_key: "生成 AUTH 密钥",
+  registering_auth_agent: "注册 Codex Agent",
+  verifying_auth_task: "验证 AUTH Task",
+  importing_sub2api: "导入 Sub2API",
   completed: "任务完成",
   failed: "任务失败"
 };
@@ -87,6 +93,8 @@ let currentMode = "button11";
 let startInFlight = false;
 let button6StartInFlight = false;
 let workspaceActionInFlight = false;
+let authExportInFlight = false;
+let sub2apiImportInFlight = false;
 let panelFeatureStartInFlight = false;
 let panelFeatureActionInFlight = false;
 
@@ -321,7 +329,8 @@ function buildButton11Content(job, accessToken) {
     `计划: ${job.planType || "--"}`,
     `Workspace: ${job.workspaceCount || 0}`,
     `网页AT: ${accessToken ? maskToken(accessToken) : "--"}`,
-    `保存位置: ${job.savedTo || "--"}`
+    `保存位置: ${job.savedTo || "--"}`,
+    `Sub2API ID: ${job.sub2apiImport?.accountId ?? "--"}`
   ].join("\n");
 }
 
@@ -343,6 +352,8 @@ function setPanelMode(mode) {
   elements.copyToken.hidden = isButton6;
   elements.openSession.hidden = isButton6;
   elements.exportResult.hidden = isButton6;
+  elements.exportAuth.hidden = isButton6;
+  elements.importSub2api.hidden = isButton6;
 }
 
 function renderJob(job) {
@@ -351,8 +362,16 @@ function renderJob(job) {
   const status = job?.status || "idle";
   const progress = Math.max(0, Math.min(100, Number(job?.progress) || 0));
   const accessToken = pageAccessToken(job);
-  const errors = [job?.error, job?.saveError, job?.workspaceError].filter(Boolean);
+  const errors = [
+    job?.error,
+    job?.saveError,
+    job?.workspaceError,
+    job?.authExport?.error,
+    job?.sub2apiImport?.error
+  ].filter(Boolean);
   const workspaceBusy = workspaceActionInFlight
+    || authExportInFlight
+    || sub2apiImportInFlight
     || status === "running"
     || job?.workspaceAction?.status === "running";
 
@@ -374,6 +393,11 @@ function renderJob(job) {
   elements.copyToken.classList.toggle("is-token-ready", Boolean(accessToken));
   elements.copyToken.disabled = !accessToken || workspaceBusy;
   elements.exportResult.disabled = !job || workspaceBusy;
+  elements.exportAuth.disabled = !accessToken || workspaceBusy;
+  elements.importSub2api.disabled = !accessToken
+    || !job?.backendBaseUrl
+    || !job?.token
+    || workspaceBusy;
   elements.openSession.disabled = !Number.isInteger(job?.tabId) || workspaceBusy;
   elements.refreshJob.disabled = workspaceBusy
     || !Number.isInteger(job?.tabId)
@@ -444,6 +468,16 @@ async function copyText(value) {
       throw error;
     }
   }
+}
+
+function downloadJson(value, filename) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 async function updateStoredWorkspaceAction(workspaceId, action, status, message) {
@@ -603,6 +637,23 @@ async function openPopupFeatureFromMatrix(featureId) {
   }
 }
 
+async function openChatGptLoginFromFeatureMatrix() {
+  const windowId = await getSidePanelWindowId();
+  const tabs = await chrome.tabs.query({ active: true, windowId });
+  const response = await chrome.runtime.sendMessage({
+    type: "OPEN_CHATGPT_LOGIN_PAGE",
+    payload: {
+      tabId: tabs?.[0]?.id,
+      windowId,
+      requestedAt: new Date().toISOString()
+    }
+  });
+  if (!response?.ok) {
+    throw new Error(response?.error || "GPT 登录页打开失败。");
+  }
+  return response;
+}
+
 async function runPanelFeature(featureId) {
   if (featureId === "6") {
     await startButton6FromFeatureMatrix();
@@ -610,6 +661,10 @@ async function runPanelFeature(featureId) {
   }
   if (featureId === "11") {
     await startButton11FromFeatureMatrix();
+    return;
+  }
+  if (featureId === "16") {
+    await openChatGptLoginFromFeatureMatrix();
     return;
   }
   await openPopupFeatureFromMatrix(featureId);
@@ -809,13 +864,87 @@ elements.exportResult.addEventListener("click", () => {
     ...currentJob,
     ...buildCodexAuthFields(currentJob)
   };
-  const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `button11-${currentJob.id || Date.now()}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  downloadJson(exportPayload, `button11-${currentJob.id || Date.now()}.json`);
+});
+
+elements.exportAuth.addEventListener("click", async () => {
+  if (!currentJob || !pageAccessToken(currentJob) || authExportInFlight) {
+    return;
+  }
+
+  const originalText = elements.exportAuth.textContent;
+  let actionError = "";
+  authExportInFlight = true;
+  elements.exportAuth.textContent = "生成中...";
+  renderJob(currentJob);
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "BUTTON11_EXPORT_AUTH"
+    });
+    if (!response?.ok || !response.authJson) {
+      throw new Error(response?.error || "AUTH 生成失败。");
+    }
+
+    downloadJson(response.authJson, "auth.json");
+    elements.exportAuth.textContent = "已导出AUTH";
+  } catch (error) {
+    actionError = error.message || String(error);
+    elements.errorSection.hidden = false;
+    elements.errorText.textContent = actionError;
+    elements.exportAuth.textContent = "导出失败";
+  } finally {
+    authExportInFlight = false;
+    await loadJob();
+    if (actionError) {
+      elements.errorSection.hidden = false;
+      elements.errorText.textContent = actionError;
+    }
+    window.setTimeout(() => {
+      elements.exportAuth.textContent = originalText;
+    }, 1200);
+  }
+});
+
+elements.importSub2api.addEventListener("click", async () => {
+  if (!currentJob || !pageAccessToken(currentJob) || sub2apiImportInFlight) {
+    return;
+  }
+
+  const originalText = elements.importSub2api.textContent;
+  let actionError = "";
+  sub2apiImportInFlight = true;
+  elements.importSub2api.textContent = "导入中...";
+  renderJob(currentJob);
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "BUTTON11_IMPORT_SUB2API",
+      payload: {
+        sub2apiUrl: "auto"
+      }
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "Sub2API 导入失败。");
+    }
+
+    elements.importSub2api.textContent = `已导入 #${response.accountId}`;
+  } catch (error) {
+    actionError = error.message || String(error);
+    elements.errorSection.hidden = false;
+    elements.errorText.textContent = actionError;
+    elements.importSub2api.textContent = "导入失败";
+  } finally {
+    sub2apiImportInFlight = false;
+    await loadJob();
+    if (actionError) {
+      elements.errorSection.hidden = false;
+      elements.errorText.textContent = actionError;
+    }
+    window.setTimeout(() => {
+      elements.importSub2api.textContent = originalText;
+    }, 1600);
+  }
 });
 
 elements.openSession.addEventListener("click", async () => {

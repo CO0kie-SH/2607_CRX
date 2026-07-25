@@ -1,6 +1,6 @@
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const EXTENSION_VERSION_NAME = chrome.runtime.getManifest().version_name || EXTENSION_VERSION;
-const LOGGER_BUILD = "url-capture-v25";
+const LOGGER_BUILD = "url-capture-v26";
 const REDACTED_VALUE = "[REDACTED]";
 const DEFAULT_BACKEND_BASE_URL = "http://127.0.0.1:8081/";
 const LEGACY_BACKEND_BASE_URL = "http://127.0.0.1:8080/";
@@ -23,8 +23,9 @@ const MAX_URL_LOGS = 300;
 const AUTO_BACKEND_CONNECT_ATTEMPTS = 3;
 const AUTO_BACKEND_CONNECT_RETRY_MS = 2000;
 const AUTO_BACKEND_START_DELAY_MS = 1000;
-const BUTTON6_AFTER_TOKEN_DELAY_MS = 3000;
+const BUTTON6_AFTER_TOKEN_DELAY_MS = 100;
 const BUTTON6_TARGET_URL = "https://ipinfo.io/explore";
+const CHATGPT_LOGIN_TARGET_URL = "https://chatgpt.com/auth/login";
 const BACKEND_TOKEN_PATTERN = /^crx-[0-9a-f]{32}$/i;
 let activeAutomaticTokenRefreshPromise = null;
 let activePrimaryBackendStartupPromise = null;
@@ -459,6 +460,103 @@ function isButton6TargetUrl(value) {
   return String(value || "").startsWith(BUTTON6_TARGET_URL);
 }
 
+function isButton6TargetTab(tab) {
+  return isButton6TargetUrl(tab?.url) || isButton6TargetUrl(tab?.pendingUrl);
+}
+
+function isAboutBlankTab(tab) {
+  const url = String(tab?.url || "").trim().toLowerCase();
+  const pendingUrl = String(tab?.pendingUrl || "").trim().toLowerCase();
+  if (pendingUrl && pendingUrl !== "about:blank") {
+    return false;
+  }
+  return url === "about:blank" || pendingUrl === "about:blank";
+}
+
+function isChatGptLoginTab(tab) {
+  return String(tab?.url || "").startsWith(CHATGPT_LOGIN_TARGET_URL)
+    || String(tab?.pendingUrl || "").startsWith(CHATGPT_LOGIN_TARGET_URL);
+}
+
+async function openChatGptLoginPage(payload = {}) {
+  const preferredTabId = Number(payload.tabId);
+  const preferredWindowId = Number(payload.windowId);
+  let currentTab = Number.isInteger(preferredTabId)
+    ? await chrome.tabs.get(preferredTabId).catch(() => null)
+    : null;
+
+  if (!currentTab) {
+    const query = { active: true };
+    if (Number.isInteger(preferredWindowId)) {
+      query.windowId = preferredWindowId;
+    } else {
+      query.lastFocusedWindow = true;
+    }
+    const activeTabs = await chrome.tabs.query(query);
+    currentTab = activeTabs[0] || null;
+  }
+
+  let tab;
+  let mode;
+  if (Number.isInteger(currentTab?.id) && isAboutBlankTab(currentTab)) {
+    [tab] = await Promise.all([
+      chrome.tabs.update(currentTab.id, {
+        url: CHATGPT_LOGIN_TARGET_URL,
+        active: true
+      }),
+      chrome.windows.update(currentTab.windowId, { focused: true })
+    ]);
+    mode = "current_tab";
+  } else {
+    const tabs = await chrome.tabs.query({});
+    const currentWindowId = Number(currentTab?.windowId ?? preferredWindowId);
+    const existingTab = tabs.find((item) => (
+      isChatGptLoginTab(item) && item.windowId === currentWindowId && item.active
+    )) || tabs.find((item) => (
+      isChatGptLoginTab(item) && item.windowId === currentWindowId
+    )) || tabs.find((item) => isChatGptLoginTab(item));
+
+    if (existingTab) {
+      [tab] = await Promise.all([
+        chrome.tabs.update(existingTab.id, { active: true }),
+        chrome.windows.update(existingTab.windowId, { focused: true })
+      ]);
+      mode = "reuse";
+    } else {
+      const createOptions = {
+        url: CHATGPT_LOGIN_TARGET_URL,
+        active: true
+      };
+      if (Number.isInteger(currentWindowId)) {
+        createOptions.windowId = currentWindowId;
+      }
+      tab = await chrome.tabs.create(createOptions);
+      mode = "new_tab";
+    }
+  }
+
+  if (!Number.isInteger(tab?.id)) {
+    throw new Error("GPT 登录页未返回标签页信息。");
+  }
+
+  const result = {
+    ok: true,
+    mode,
+    tabId: tab.id,
+    windowId: tab.windowId,
+    targetUrl: CHATGPT_LOGIN_TARGET_URL
+  };
+  writeLog("chatgpt_login_page_opened", result);
+  await appendBackgroundRuntimeLog("GPT 登录页已打开", {
+    status: "success",
+    mode,
+    tabId: tab.id,
+    windowId: tab.windowId,
+    targetUrl: CHATGPT_LOGIN_TARGET_URL
+  });
+  return result;
+}
+
 async function resolveButton6TargetTab(windowId, preferredTabId = null) {
   const normalizedPreferredTabId = preferredTabId !== null
     && preferredTabId !== undefined
@@ -468,7 +566,7 @@ async function resolveButton6TargetTab(windowId, preferredTabId = null) {
 
   if (Number.isInteger(normalizedPreferredTabId)) {
     const preferredTab = await chrome.tabs.get(normalizedPreferredTabId).catch(() => null);
-    if (preferredTab && isButton6TargetUrl(preferredTab.url || preferredTab.pendingUrl)) {
+    if (preferredTab && isButton6TargetTab(preferredTab)) {
       return preferredTab;
     }
   }
@@ -476,7 +574,7 @@ async function resolveButton6TargetTab(windowId, preferredTabId = null) {
   const tabs = await chrome.tabs.query({ windowId });
   return tabs.find((tab) => (
     Number.isInteger(tab?.id)
-    && isButton6TargetUrl(tab.url || tab.pendingUrl)
+    && isButton6TargetTab(tab)
   )) || null;
 }
 
@@ -668,14 +766,14 @@ async function queueButton6PopupPrompt({
   if (
     sourceWindow?.focused
     && sourceTab?.active
-    && isButton6TargetUrl(sourceTab.url || sourceTab.pendingUrl)
+    && isButton6TargetTab(sourceTab)
   ) {
     writeLog("button6_popup_prompt_focus_state_matched", {
       jobId,
       sourceWindowId: normalizedWindowId,
       sourceTabId: normalizedTabId
     });
-    void openButton6PopupPromptForFocusedTab(normalizedWindowId, sourceTab).catch((error) => {
+    await openButton6PopupPromptForFocusedTab(normalizedWindowId, sourceTab).catch((error) => {
       writeLog("button6_popup_prompt_focus_state_failed", {
         jobId,
         sourceWindowId: normalizedWindowId,
@@ -707,7 +805,7 @@ async function openButton6PopupPromptForFocusedTab(windowId, tab) {
   if (
     windowId !== sourceWindowId
     || Number(tab?.id) !== sourceTabId
-    || !isButton6TargetUrl(tab?.url || tab?.pendingUrl)
+    || !isButton6TargetTab(tab)
   ) {
     return {
       ok: false,
@@ -819,12 +917,18 @@ async function completeButton6PopupPrompt(payload = {}) {
   const sourceTabId = Number(payload.sourceTabId ?? prompt.sourceTabId);
   const sourceWindowId = Number(payload.sourceWindowId ?? prompt.sourceWindowId);
   const jobId = String(payload.jobId || prompt.jobId || "");
+  const completedPrompt = {
+    ...prompt,
+    status: "completed",
+    popupWindowId: null,
+    completedAt: new Date().toISOString()
+  };
+  await chrome.storage.session.set({
+    [BUTTON6_POPUP_PROMPT_STORAGE_KEY]: completedPrompt
+  });
   const embeddedResult = await removeButton6EmbeddedFeatureArea(sourceTabId);
 
-  await chrome.storage.session.remove([
-    BUTTON6_POPUP_PROMPT_STORAGE_KEY,
-    BUTTON6_NATIVE_PANEL_PENDING_STORAGE_KEY
-  ]);
+  await chrome.storage.session.remove(BUTTON6_NATIVE_PANEL_PENDING_STORAGE_KEY);
   writeLog("button6_popup_prompt_completed", {
     jobId,
     sourceWindowId: Number.isInteger(sourceWindowId) ? sourceWindowId : null,
@@ -836,6 +940,24 @@ async function completeButton6PopupPrompt(payload = {}) {
     ok: true,
     embeddedResult
   };
+}
+
+async function isButton6PopupPromptCompleted(jobId) {
+  const stored = await chrome.storage.session.get(BUTTON6_POPUP_PROMPT_STORAGE_KEY);
+  const prompt = stored[BUTTON6_POPUP_PROMPT_STORAGE_KEY];
+  return Boolean(
+    prompt
+    && prompt.status === "completed"
+    && String(prompt.jobId || "") === String(jobId || "")
+  );
+}
+
+async function clearCompletedButton6PopupPrompt(jobId) {
+  if (await isButton6PopupPromptCompleted(jobId)) {
+    await chrome.storage.session.remove(BUTTON6_POPUP_PROMPT_STORAGE_KEY);
+    return true;
+  }
+  return false;
 }
 
 function scheduleButton6AfterBackendToken({
@@ -886,7 +1008,22 @@ function scheduleButton6AfterBackendToken({
       [SIDEPANEL_ACTIVE_MODE_STORAGE_KEY]: "button6"
     });
 
-    const taskPromise = workerApi.start(payload);
+    let navigationPromptQueued = false;
+    const taskPromise = workerApi.start({
+      ...payload,
+      onNavigationStarted: async (navigation) => {
+        const promptResult = await queueButton6PopupPrompt({
+          jobId: payload.jobId,
+          windowId: navigation.windowId ?? windowId,
+          tabId: navigation.tabId,
+          trigger,
+          reason,
+          panelMode: "navigation_pending"
+        });
+        navigationPromptQueued = Boolean(promptResult?.ok);
+        return promptResult;
+      }
+    });
     writeLog("button6_after_token_started", {
       trigger,
       reason,
@@ -907,25 +1044,48 @@ function scheduleButton6AfterBackendToken({
 
     void taskPromise.then(async (response) => {
       const succeeded = Boolean(response?.ok);
-      const featureArea = await openButton6RightFeatureArea(windowId, response?.tabId).catch(async (error) => {
-        const message = error.message || String(error);
-        writeLog("button6_right_feature_area_failed", {
+      let featureArea;
+      if (await isButton6PopupPromptCompleted(payload.jobId)) {
+        featureArea = {
+          ok: true,
+          mode: "side_panel",
           windowId,
-          jobId: payload.jobId,
-          error: message
-        });
-        await appendBackgroundRuntimeLog("按钮6右侧功能区打开失败", {
-          status: "error",
-          windowId,
-          jobId: payload.jobId,
-          error: message
-        });
-        return {
-          ok: false,
-          mode: "error",
-          error: message
+          tabId: Number.isInteger(response?.tabId) ? response.tabId : null,
+          confirmedByPrompt: true
         };
-      });
+      } else {
+        featureArea = await openButton6RightFeatureArea(windowId, response?.tabId).catch(async (error) => {
+          const message = error.message || String(error);
+          writeLog("button6_right_feature_area_failed", {
+            windowId,
+            jobId: payload.jobId,
+            error: message
+          });
+          await appendBackgroundRuntimeLog("按钮6右侧功能区打开失败", {
+            status: "error",
+            windowId,
+            jobId: payload.jobId,
+            error: message
+          });
+          return {
+            ok: false,
+            mode: "error",
+            error: message
+          };
+        });
+      }
+
+      if (await isButton6PopupPromptCompleted(payload.jobId)) {
+        if (featureArea.mode === "embedded" && Number.isInteger(featureArea.tabId)) {
+          await removeButton6EmbeddedFeatureArea(featureArea.tabId);
+        }
+        featureArea = {
+          ...featureArea,
+          mode: "side_panel",
+          confirmedByPrompt: true
+        };
+        await clearCompletedButton6PopupPrompt(payload.jobId);
+      }
       writeLog(succeeded ? "button6_after_token_completed" : "button6_after_token_failed", {
         trigger,
         reason,
@@ -948,7 +1108,7 @@ function scheduleButton6AfterBackendToken({
           error: succeeded ? "" : response?.error || "按钮6任务失败。"
         }
       );
-      if (succeeded && featureArea.mode !== "side_panel") {
+      if (succeeded && featureArea.mode !== "side_panel" && !navigationPromptQueued) {
         try {
           await queueButton6PopupPrompt({
             jobId: payload.jobId,
@@ -1847,6 +2007,16 @@ chrome.windows.onRemoved.addListener((windowId) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "OPEN_CHATGPT_LOGIN_PAGE") {
+    openChatGptLoginPage(message.payload || {}).then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        error: error.message || String(error)
+      });
+    });
+    return true;
+  }
+
   if (message?.type === "SCHEDULE_BUTTON6_AFTER_TOKEN") {
     scheduleButton6AfterBackendToken({
       trigger: String(message.payload?.trigger || "manual_backend_token_completed"),

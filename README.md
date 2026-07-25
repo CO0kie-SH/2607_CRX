@@ -1,10 +1,10 @@
 # Chrome URL 跳转捕获扩展
 
-> 当前版本：`26.7.19B`
-> 最后更新：`2026-07-19B`
-> 插件版本：`26.7.19`
-> 插件展示版本：`26.7.19B`
-> 日志构建：`url-capture-v25`
+> 当前版本：`26.7.22A`
+> 最后更新：`2026-07-22A`
+> 插件版本：`26.7.22`
+> 插件展示版本：`26.7.22A`
+> 日志构建：`url-capture-v26`
 > 项目定位：合法合规地调试 Chrome 页面跳转链路，并通过本地 aiohttp 服务接收扩展上报、生成 CTF 地址/姓名/卡片测试数据和保存调试日志。
 
 ---
@@ -37,6 +37,7 @@
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| `26.7.22A` | 2026-07-22A | 新增按钮11纯 JS `auth.json` 导出与 Sub2API JSON-RPC 导入；按钮6 Token 后延迟改为 100ms，支持当前 `about:blank` 直接定向并在目标 URL 提交时提前打开确认 Popup；功能16改为“打开GPT登录页”，支持空白页定向、已有页面复用和新建标签三种模式 |
 | `26.7.19B` | 2026-07-19B | 修正版；插件展示版本更新为 `26.7.19B`，Popup 扩展标记更新为 `7.29B`；按钮6自动任务在原生 Side Panel 缺少用户手势时恢复 IPInfo 网页内侧栏，并在来源窗口重新获得焦点后弹出按钮6确认 Popup；用户点击后打开原生 Side Panel、移除网页内嵌栏并关闭确认窗口，且不重复执行已完成的 IPInfo 自动任务 |
 | `26.7.19A` | 2026-07-19A | 封版版本；默认后端端口统一为 `8081`；浏览器启动后自动连接后端并重新执行按钮1 token 获取流程，`onStartup` 未触发时可由首次启动页窗口焦点事件兜底连接并复用旧 token；popup 扩展到功能1-20；按钮6改名为“打开网页AT”，按钮11保留“提取网页AT”并升级为 Side Panel + Service Worker 持久任务；支持无缓存刷新、网页 AT 复制、Codex JSON 导出、Workspace AT 交换/复制、网页 AT 与空间 AT 分字段保存、空间 AT 差异缩写和指纹显示，以及复制按钮按获取状态显示绿色 |
 | `26.7.5A` | 2026-07-05A | 封版版本；插件 `version` 更新为 `26.7.5`，`version_name` 更新为 `26.7.5A`；后台日志构建更新为 `url-capture-v16`；按钮6“提取网页AT”补齐 workspace 导出闭环，浮窗新增 workspace 列表、单项复制 AT、导出空间 AT JSON、导出 `team.csv`、`/backend-api/me` 状态回填和批量导出进度条；按钮8由占位入口升级为“城市检查”，可基于 MayIP + AddressGen 查询城市、申请地址并显示浮窗 |
@@ -217,8 +218,26 @@ http://192.168.1.15:8081/api/html/all
 | `POST` | `/api/address/from-city` | 保留接口；根据 city/region_name/country 生成地址、kanji/kana 配对姓名，并附带一张 `ctf_toolkit.py` 生成的 Luhn 测试卡 |
 | `POST` | `/api/name/generate` | 根据 JSON-RPC `name.generate` 生成日本测试姓名，返回 kanji、hiragana、romaji、meaning、nameType、gender 等字段 |
 | `POST` | `/api/at/save` | 接收按钮6或按钮11提取的 ChatGPT accessToken，保存到 `db/[token]/at-YYYY-MM-DD.csv` |
+| `POST` | `/api/sub2api/import` | 接收 JSON-RPC `sub2api.import`；使用前端生成的 `auth_json` 字符串导入 Sub2API，并返回新增或更新后的账号 ID |
 | `POST` | `/api/log` | 扩展日志上报原始路径 |
 | `POST` | `/api/report` | 扩展日志上报推荐路径，避免部分浏览器拦截 `/api/log` |
+
+Sub2API 导入请求使用 JSON-RPC 2.0：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "sub2api.import",
+  "params": {
+    "token": "crx-TOKEN",
+    "sub2api_url": "auto",
+    "auth_json": "{\"auth_mode\":\"agent_identity\",\"agent_identity\":{\"agent_runtime_id\":\"AGENT_RUNTIME_ID\",\"agent_private_key\":\"PRIVATE_KEY\",\"account_id\":\"ACCOUNT_ID\",\"chatgpt_user_id\":\"USER_ID\"}}"
+  },
+  "id": 1001
+}
+```
+
+`sub2api_url` 默认为 `auto`，此时后端读取 `auth/sub2api.json`；传入 HTTP(S) URL 时只覆盖配置中的 `sub2api.base`。`auth_json` 必须是前端生成的完整 JSON 字符串。
 
 ---
 
@@ -238,8 +257,9 @@ http://192.168.1.15:8081/api/html/all
   - 功能8：城市检查，复用按钮7/MayIP 返回的 country、city、region_name，查询 AddressGen 区域列表并申请地址，最终通过浮窗展示结果
   - 功能9：预留按钮，当前使用占位点击提示
   - 功能10：预留按钮，当前使用占位点击提示
-  - 功能11“提取网页AT”：使用 Side Panel + Service Worker 后台任务；点击后立即打开并激活新标签页，再跳转 Session 页面完成 AT 提取、保存和 workspace 查询；顶部复制按钮固定复制网页 Session AT，Workspace 列表会显示各空间交换得到的 AT 差异片段与指纹，并由行内按钮独立复制；网页 AT 获取成功后顶部复制按钮变绿，空间交换成功后对应行复制按钮变绿；导出 JSON 保留原任务结构，并追加 Codex `auth.json` 的 `auth_mode`、`OPENAI_API_KEY`、`tokens`、`last_refresh` 字段
-  - 功能12-20：预留按钮，当前使用占位点击提示
+  - 功能11“提取网页AT”：使用 Side Panel + Service Worker 后台任务；点击后立即打开并激活新标签页，再跳转 Session 页面完成 AT 提取、保存和 workspace 查询；顶部复制按钮固定复制网页 Session AT，Workspace 列表会显示各空间交换得到的 AT 差异片段与指纹，并由行内按钮独立复制；“导出JSON”导出任务与 Codex token 字段，“导出AUTH”生成并下载 `agent_identity` 格式的 `auth.json`，“导入Sub2API”在前端生成同格式 AUTH 后通过本地 JSON-RPC 接口导入并显示账号 ID
+  - 功能12-15、17-20：预留按钮，当前使用占位点击提示
+  - 功能16“打开GPT登录页”：打开 `https://chatgpt.com/auth/login`；当前活动页为 `about:blank` 时直接定向当前页，否则优先复用已有登录页，未找到时新建标签页
 - popup 打开时读取当前标签页信息。
 - 后台记录扩展安装、浏览器启动、popup 打开等事件。
 - 浏览器启动后后台等待页面恢复，最多尝试连接后端 3 次；连接成功后重新申请 token、收集全部标签页快照、创建 token CSV，并写回 `settings.backendToken`。
@@ -317,6 +337,36 @@ http://192.168.1.15:8081/api/html/all
 4. 申请成功后生成地址结果浮窗，内容包含姓名、邮箱、电话、生日、州/省、城市、邮编和完整地址。
 5. 如果当前页不允许注入或注入失败，会自动打开 `https://mayips.com/` 作为回退展示页，避免结果丢失。
 6. 整个过程会写入 popup 运行日志，便于复盘“查列表 / 申请地址 / 浮窗回退”这三段行为。
+
+---
+
+## 封版说明（2026-07-22A）
+
+本次围绕“26.7.22A 封版、按钮11 AUTH/Sub2API 闭环、按钮6启动时序优化和功能16登录入口”完成以下更新：
+
+1. `chrome-extension/manifest.json` 的 `version` 更新为 `26.7.22`，`version_name` 更新为 `26.7.22A`。
+2. 后台日志构建更新为 `url-capture-v26`，Popup 构建标记更新为 `7.22A`。
+3. 按钮11操作区调整为三列两行：`刷新AT / 复制AT / 打开Session / 导出json / 导出AUTH / 导入Sub2API`。
+4. “导出AUTH”使用纯 JavaScript Web Crypto Ed25519 流程生成密钥，完成 Agent 注册与 Task 验证后下载 `agent_identity` 格式的 `auth.json`。
+5. “导入Sub2API”在前端复用同一 AUTH 生成流程，并把完整 `auth.json` 作为 JSON 字符串提交给本地后端。
+6. 后端新增 `POST /api/sub2api/import` 与 JSON-RPC `sub2api.import`；`sub2api_url: "auto"` 时读取 `auth/sub2api.json`，显式 HTTP(S) 地址可覆盖配置中的服务地址，成功后向前端返回新增或更新的账号 ID。
+7. 按钮6在后端 Token 成功后的固定等待由 3000ms 缩短为 100ms，Popup 阶段提示同步更新为“等待0.1秒”。
+8. 按钮6启动时优先检查目标窗口当前活动页；页面为 `about:blank` 时直接在当前标签页定向 `https://ipinfo.io/explore`，不会额外创建标签页。
+9. 按钮6确认 Popup 提前到目标 URL 提交阶段打开；已有 IPInfo 页面则在激活页面时触发，不再等待页面采集任务完成。
+10. URL 加载态同时检查 `url` 与 `pendingUrl`，避免 `about:blank` 正在定向 IPInfo 时被误判为离开目标页面。
+11. 用户提前点击确认后，原生 Side Panel 会立即打开并实时读取 `button6.job`；确认状态保留到任务结束，防止完成阶段再次注入网页内嵌面板或重复弹窗。
+12. 用户暂未确认时，按钮6 Worker 继续完成页面加载与采集；任务结束后原生 Side Panel 因缺少用户手势未打开时，仍保留网页内嵌面板回退。
+13. Side Panel 初始化继续统一使用 `sidepanel.activeMode`、`button6.pending`、`button11.pending` 和对应任务状态；已打开面板通过 `chrome.storage.onChanged` 实时切换与刷新。
+14. Popup 和 Side Panel 的功能16改为“打开GPT登录页”，目标地址为 `https://chatgpt.com/auth/login`。
+15. 功能16统一由 Service Worker 导航：当前页为 `about:blank` 时直接定向，否则优先复用已有登录页，最后在当前窗口新建标签页。
+
+封版检查结果：
+
+- 全部 `chrome-extension/*.js` JavaScript 语法检查通过，`manifest.json` JSON 解析通过。
+- 按钮6模拟测试确认 `about:blank` 分支不会调用 `tabs.create`，执行顺序为“URL 定向 -> 请求确认 Popup -> 页面采集”。
+- 功能16后台模拟测试覆盖 `current_tab`、`reuse`、`new_tab` 三种导航模式并全部通过。
+- Sub2API 后端测试使用 `D:\0Code2\py312\python.exe` 执行，结果为 `4 passed`。
+- `git diff --check` 检查通过。
 
 ---
 
@@ -846,7 +896,7 @@ https://getip.morelogin.com/black_whiteList_stop_page.html
 当前版本日志标题格式：
 
 ```text
-[My Extension v26.7.19B url-capture-v25] url_jump_recorded 2026-...
+[My Extension v26.7.22A url-capture-v26] url_jump_recorded 2026-...
 ```
 
 如果仍然看到旧格式：
@@ -911,7 +961,8 @@ https://getip.morelogin.com/black_whiteList_stop_page.html
 - 功能6“打开网页AT”提取 ChatGPT accessToken，展示 workspace 列表，并支持导出 workspace AT JSON 和 `team.csv`
 - 功能7抓取 MayIP 信息，写回 `country`、`city`、`region_name`
 - 功能8查询 AddressGen 城市并申请地址，结果通过浮窗展示
-- 功能9、10 以及功能12到功能20为预留按钮，当前使用占位点击提示
+- 功能9、10、功能12到15以及功能17到20为预留按钮，当前使用占位点击提示
+- 功能16“打开GPT登录页”通过后台统一打开 `https://chatgpt.com/auth/login`，支持当前空白页定向、已有登录页复用和新建标签页三种模式
 - 功能11“提取网页AT”通过 Side Panel 提交任务，由 `button11_worker.js` 在 Service Worker 中新建并激活标签页、跳转 Session、提取并保存 AT、查询 workspace；网页 Session AT 与 Workspace 交换 AT 分字段保存，顶部复制按钮只读取网页 AT，空间行内复制按钮只读取该行已加载的交换 AT；空间 AT 使用差异片段和指纹缩写，复制按钮按获取状态显示绿色；切换页面后任务继续运行，无缓存刷新会重新运行完整流程
 - 读取当前活动标签页
 - 输出当前页面标题、URL、域名、tab ID、窗口 ID 等信息
@@ -977,14 +1028,15 @@ Get-Content -Raw .\chrome-extension\manifest.json | ConvertFrom-Json | Out-Null
 本次会话主要变更集中在：
 
 - `README.md`：项目说明文档
-- `chrome-extension/manifest.json`：版本为 `26.7.19`，展示版本为 `26.7.19B`，包含导航捕获和 Side Panel 所需权限
-- `chrome-extension/background.js`：负责后台日志、导航捕获、版本输出、加载上报和浏览器启动后的后端 token 自动刷新
-- `chrome-extension/button11_worker.js`：负责按钮11后台任务、Session 提取、AT 保存、Workspace 查询以及空间 AT 交换/恢复
+- `chrome-extension/manifest.json`：版本为 `26.7.22`，展示版本为 `26.7.22A`，包含导航捕获和 Side Panel 所需权限
+- `chrome-extension/background.js`：负责后台日志、导航捕获、版本输出、浏览器启动后的后端 token 自动刷新、按钮6确认时序和功能16页面导航
+- `chrome-extension/button11_worker.js`：负责按钮11后台任务、Session 提取、AT 保存、Workspace 查询、空间 AT 交换/恢复、AUTH 生成和 Sub2API 导入请求
 - `chrome-extension/content.js`：负责页面内 URL 变化采集
 - `chrome-extension/popup.html`：负责 popup 布局、功能1到功能20和运行日志面板
-- `chrome-extension/popup.js`：负责地址配置、功能按钮、运行日志展示、刷新 token、页面内容提取、按钮6 workspace 导出、按钮11 Side Panel 任务提交和按钮8城市检查
-- `chrome-extension/sidepanel.html|css|js`：负责按钮11进度、网页/空间 AT 分离复制、JSON 导出、Session 无缓存刷新、Workspace 交换和状态显示
-- `server/app.py`：负责 Dashboard、地址/姓名/卡片生成接口、扩展上报接口、token 生成、CSV 创建接口和页面内容接收接口
+- `chrome-extension/popup.js`：负责地址配置、功能按钮、运行日志展示、刷新 token、页面内容提取、按钮6/11任务入口、按钮8城市检查和功能16登录页入口
+- `chrome-extension/sidepanel.html|css|js`：负责按钮6/11任务展示、网页/空间 AT 分离复制、JSON/AUTH 导出、Sub2API 导入、Session 无缓存刷新、Workspace 操作和功能矩阵
+- `server/app.py`：负责 Dashboard、地址/姓名/卡片生成接口、扩展上报接口、token 生成、页面内容接收和 Sub2API JSON-RPC 导入接口
+- `tests/test_sub2api_import.py`：覆盖 Sub2API 配置读取、请求转发、账号 ID 返回和错误处理
 - `server/runner.py`：负责 aiohttp host/port 参数，默认端口为 `8081`
 - `main.py`：负责初始化控制台和文件日志
 - `main.bat`：Windows 启动入口，默认以 `0.0.0.0:8081` 启动后端

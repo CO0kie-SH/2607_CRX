@@ -1,0 +1,35 @@
+{
+  "_comment": "0722D 配置模板 — session.json → agent_identity → 中转站导入；name 支持 {plan}/{email}",
+  "session_file": "session.json",
+  "auth_output": "auth.json",
+  "verify_task": true,
+  "impersonate": "chrome",
+  "sub2api": {
+    "base": "",
+    "email": "admin@sub2api.local",
+    "password": ""
+  },
+  "import": {
+    "name": "auth-{plan}-{email}",
+    "notes": null,
+    "group_ids": [12],
+    "proxy_id": null,
+    "concurrency": 3,
+    "priority": 1,
+    "rate_multiplier": 1,
+    "expires_at": null,
+    "auto_pause_on_expired": true,
+    "update_existing": true,
+    "model_mapping": {
+      "gpt-5.6-terra": "gpt-5.6-terra",
+      "gpt-5.6-luna": "gpt-5.6-luna",
+      "gpt-5.5": "gpt-5.5",
+      "gpt-5.4-mini": "gpt-5.4-mini",
+      "gpt-image-2": "gpt-image-2"
+    },
+    "extra": {
+      "openai_oauth_responses_websockets_v2_mode": "off",
+      "openai_oauth_responses_websockets_v2_enabled": false
+    }
+  }
+}

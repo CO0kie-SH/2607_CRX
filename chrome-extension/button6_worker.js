@@ -47,6 +47,47 @@
     return String(value || "").startsWith(TARGET_URL);
   }
 
+  function isAboutBlankTab(tab) {
+    const url = String(tab?.url || "").trim().toLowerCase();
+    const pendingUrl = String(tab?.pendingUrl || "").trim().toLowerCase();
+    if (pendingUrl && pendingUrl !== "about:blank") {
+      return false;
+    }
+    return url === "about:blank" || pendingUrl === "about:blank";
+  }
+
+  async function findActiveAboutBlankTab(windowId) {
+    const query = { active: true };
+    if (Number.isInteger(windowId)) {
+      query.windowId = windowId;
+    } else {
+      query.lastFocusedWindow = true;
+    }
+    const tabs = await chrome.tabs.query(query);
+    return tabs.find((tab) => isAboutBlankTab(tab)) || null;
+  }
+
+  async function notifyNavigationStarted(payload, tab, mode) {
+    if (typeof payload?.onNavigationStarted !== "function") {
+      return;
+    }
+    try {
+      await payload.onNavigationStarted({
+        jobId: payload.jobId,
+        tabId: tab?.id,
+        windowId: tab?.windowId,
+        targetUrl: TARGET_URL,
+        mode,
+        requestedAt: nowIso()
+      });
+    } catch (error) {
+      await updateJob({}, createLog(
+        `确认 Popup 提前打开失败：${error.message || String(error)}`,
+        "warning"
+      ));
+    }
+  }
+
   async function findExistingTargetTab() {
     const tabs = await chrome.tabs.query({});
     const matches = tabs.filter((tab) => (
@@ -279,7 +320,35 @@
         { phase: "checking_tabs", progress: 12, message: "正在查找已有 IPInfo 标签页..." },
         createLog("正在检查标签列表中的 IPInfo Explore 页面。")
       );
-      let tab = await findExistingTargetTab();
+      let tab = await findActiveAboutBlankTab(windowId);
+      if (tab) {
+        await updateJob({
+          mode: "current_tab",
+          tabId: tab.id,
+          windowId: tab.windowId,
+          phase: "navigating",
+          progress: 28,
+          message: "当前页为空白页，正在直接跳转 IPInfo Explore..."
+        }, createLog(`复用当前 about:blank 标签页 ${tab.id}，直接跳转 ${TARGET_URL}。`));
+
+        await chrome.windows.update(tab.windowId, { focused: true });
+        tab = await chrome.tabs.update(tab.id, { url: TARGET_URL, active: true });
+        await notifyNavigationStarted(payload, tab, "current_tab");
+        await updateJob(
+          { phase: "loading_page", progress: 68, message: "正在等待页面加载..." },
+          createLog("当前标签页已提交目标地址，等待页面完成加载。")
+        );
+        tab = await waitForTargetPage(tab.id);
+        await updateJob(
+          { phase: "recording_content", progress: 86, message: "页面已加载，正在记录页面内容..." },
+          createLog(`页面加载完成：${tab.title || tab.url || TARGET_URL}。`)
+        );
+        const content = await capturePageContent(tab.id);
+        await completeJob(tab, "current_tab", content);
+        return { ok: true, jobId, tabId: tab.id, mode: "current_tab" };
+      }
+
+      tab = await findExistingTargetTab();
       if (tab) {
         await updateJob({
           mode: "reuse",
@@ -295,6 +364,8 @@
         if (!isTargetUrl(tab.url)) {
           tab = await waitForTargetPage(tab.id);
         }
+
+        await notifyNavigationStarted(payload, tab, "reuse");
 
         await updateJob(
           { phase: "refreshing_page", progress: 58, message: "正在无缓存刷新已有页面..." },
@@ -333,6 +404,8 @@
       }, createLog(`标签页 ${tab.id} 已创建，准备跳转 ${TARGET_URL}。`));
       await delay(80);
       await chrome.tabs.update(tab.id, { url: TARGET_URL, active: true });
+      tab = await chrome.tabs.get(tab.id);
+      await notifyNavigationStarted(payload, tab, "new_tab");
       await updateJob(
         { phase: "loading_page", progress: 68, message: "正在等待页面加载..." },
         createLog("目标地址已提交，等待页面完成加载。")

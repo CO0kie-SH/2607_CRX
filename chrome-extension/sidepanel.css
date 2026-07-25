@@ -224,6 +224,7 @@ dd {
 }
 
 .feature-section .actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   padding: 12px 0 0;
   border-bottom: 0;
 }
