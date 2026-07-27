@@ -367,23 +367,33 @@ async def api_at_save(request: web.Request) -> web.Response:
             )
         return json_response_with_cors(error_response, status=400)
 
-    # 构建 CSV 文件路径: db/crx-xxx/at-YYYY-MM-DD.csv
+    # 构建 CSV 文件路径: db/crx-xxx/at-YYYY-MM-DD.csv 与总览 db/at-YYYY-MM-DD.csv
     today_str = datetime.now().strftime("%Y-%m-%d")
     at_csv_file = token_dir / f"at-{today_str}.csv"
+    overview_at_csv_file = DB_DIR / f"at-{today_str}.csv"
 
     created_at = time_str if isinstance(time_str, str) and time_str else utc_iso_now()
 
-    # CSV 表头
+    # 单 token CSV 表头 / 总览 CSV 表头（多 token 需带 token 列）
     at_csv_headers = ["time", "user", "accessToken"]
+    overview_at_csv_headers = ["time", "token", "user", "accessToken"]
 
-    # 写入或追加 CSV
-    file_exists = at_csv_file.exists()
+    # 写入或追加：单 token 文件 + 总览文件
     try:
+        DB_DIR.mkdir(parents=True, exist_ok=True)
+        file_exists = at_csv_file.exists()
         with at_csv_file.open("a", newline="", encoding="utf-8") as fp:
             writer = csv.writer(fp)
             if not file_exists:
                 writer.writerow(at_csv_headers)
             writer.writerow([created_at, user, access_token])
+
+        overview_exists = overview_at_csv_file.exists()
+        with overview_at_csv_file.open("a", newline="", encoding="utf-8") as fp:
+            writer = csv.writer(fp)
+            if not overview_exists:
+                writer.writerow(overview_at_csv_headers)
+            writer.writerow([created_at, token, user, access_token])
     except Exception as e:
         error_response = {
             "ok": False,
@@ -396,13 +406,20 @@ async def api_at_save(request: web.Request) -> web.Response:
             )
         return json_response_with_cors(error_response, status=500)
 
-    LOGGER.info("Saved AccessToken. token=%s user=%s file=%s", token, user, at_csv_file)
+    LOGGER.info(
+        "Saved AccessToken. token=%s user=%s file=%s overview=%s",
+        token,
+        user,
+        at_csv_file,
+        overview_at_csv_file,
+    )
 
     result = {
         "ok": True,
         "token": token,
         "user": user,
         "saved_to": display_token_csv_path(at_csv_file),
+        "overview_saved_to": display_token_csv_path(overview_at_csv_file),
     }
 
     if rpc_id is not None:

@@ -1,6 +1,6 @@
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 const EXTENSION_VERSION_NAME = chrome.runtime.getManifest().version_name || EXTENSION_VERSION;
-const LOGGER_BUILD = "url-capture-v26";
+const LOGGER_BUILD = "url-capture-v33";
 const REDACTED_VALUE = "[REDACTED]";
 const DEFAULT_BACKEND_BASE_URL = "http://127.0.0.1:8081/";
 const LEGACY_BACKEND_BASE_URL = "http://127.0.0.1:8080/";
@@ -1830,6 +1830,34 @@ function recordNavigationAttempt(source, details) {
   });
 }
 
+function triggerButton17NavigationRecovery(source, details) {
+  const handler = globalThis.__CRX_BUTTON17_WORKER__?.handleNavigationSignal;
+  if (typeof handler !== "function") {
+    return;
+  }
+
+  void handler(source, details).then((result) => {
+    if (result?.recovered || (result?.attempt && !result?.ignored)) {
+      writeLog("button17_navigation_recovery_result", {
+        source,
+        tabId: details.tabId ?? null,
+        windowId: details.windowId ?? null,
+        recovered: Boolean(result.recovered),
+        attempt: result.attempt || 0,
+        exhausted: Boolean(result.exhausted),
+        error: result.error || ""
+      });
+    }
+  }).catch((error) => {
+    writeLog("button17_navigation_recovery_failed", {
+      source,
+      tabId: details.tabId ?? null,
+      windowId: details.windowId ?? null,
+      error: error.message || String(error)
+    });
+  });
+}
+
 chrome.runtime.onInstalled.addListener((details) => {
   void ensureDefaultSettings().then(() => postExtensionLoadReport("onInstalled", details.reason || "unknown"));
   void startPrimaryBackendStartupFlow("onInstalled", details.reason || "unknown");
@@ -1952,6 +1980,12 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
       url: tab.url,
       title: tab.title || "",
       frameId: 0
+    });
+    triggerButton17NavigationRecovery("windows.onFocusChanged", {
+      tabId: tab.id ?? null,
+      windowId: tab.windowId ?? null,
+      url: tab.url,
+      title: tab.title || ""
     });
 
     void openButton6PopupPromptForFocusedTab(windowId, tab).catch((error) => {
@@ -2079,13 +2113,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "CONTENT_URL_EVENT") {
-    recordNavigationAttempt(message.payload?.reason || "content.url_event", {
+    const source = message.payload?.reason || "content.url_event";
+    const details = {
       tabId: sender.tab?.id ?? null,
       windowId: sender.tab?.windowId ?? null,
       url: message.payload?.url || sender.tab?.url || "",
       title: message.payload?.title || sender.tab?.title || "",
       frameId: sender.frameId ?? 0
-    });
+    };
+    recordNavigationAttempt(source, details);
+    if (source === "page_loaded") {
+      triggerButton17NavigationRecovery(source, details);
+    }
     sendResponse({ ok: true });
     return true;
   }

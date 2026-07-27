@@ -1,10 +1,10 @@
 # Chrome URL 跳转捕获扩展
 
-> 当前版本：`26.7.22A`
-> 最后更新：`2026-07-22A`
-> 插件版本：`26.7.22`
-> 插件展示版本：`26.7.22A`
-> 日志构建：`url-capture-v26`
+> 当前版本：`26.7.27L`
+> 最后更新：`2026-07-27L`
+> 插件版本：`26.7.27`
+> 插件展示版本：`26.7.27L`
+> 日志构建：`url-capture-v33`
 > 项目定位：合法合规地调试 Chrome 页面跳转链路，并通过本地 aiohttp 服务接收扩展上报、生成 CTF 地址/姓名/卡片测试数据和保存调试日志。
 
 ---
@@ -37,6 +37,18 @@
 
 | 版本 | 日期 | 说明 |
 |---|---|---|
+| `26.7.27L` | 2026-07-27L | 按钮18修复 Codex 用量识别：必须以「每月使用上限」百分比就绪，避免仅读到「剩余额度 0」就提前返回；加强 article DOM、文本回退和大号百分比节点解析 |
+| `26.7.27K` | 2026-07-27K | 新增按钮18「读取Codex用量」：Side Panel + `button18_worker.js` 打开 `https://chatgpt.com/codex/settings/usage`，读取每月使用上限剩余百分比、进度条宽度和剩余额度 |
+| `26.7.27J` | 2026-07-27J | 按钮17仅当币种为 VND 时允许提取 AT / 检测 MoMo；零价且 VND 时自动提取 AT 并检测支付通道，非 VND 禁用相关按钮 |
+| `26.7.27I` | 2026-07-27I | 按钮17 Checkout/Stripe 对齐 20260727A HAR：body 使用 `promo_campaign=plus-1-month-free` + VN/VND，Stripe init 表单字段对齐；JWT 非 free 跳过 Checkout；`amount_due=0` 与真 trial 区分 |
+| `26.7.27H` | 2026-07-27H | 按钮17识别已订阅 Plus（CTA「你当前的套餐」），标记 `alreadyOnPlus` 且不再把页面 0 元当作可试用 |
+| `26.7.27G` | 2026-07-27G | 修复零价 Plus 的 Checkout 返回 `one_click_trial_eligible=false` 时提前跳过 Stripe init 的问题；该字段降级为诊断信息，零价页面始终继续读取支付方式，并以 trial 标记或 Stripe 应付金额为 0 判断优惠是否生效，MoMo 通道结论与优惠结论独立展示 |
+| `26.7.27F` | 2026-07-27F | 按钮17的 AT 区域新增三按钮操作行；“检测MoMo通道”使用纯扩展 JavaScript 创建未确认的 VN/VND Plus Checkout，读取 Stripe init 支付方式并判断是否包含 `momo`，另外两个按钮为禁用占位，全程不调用本地后端 |
+| `26.7.27E` | 2026-07-27E | 按钮17的当前账号 AT 区域移动到任务完成消息下方；Plus 当前价格为 0 时由扩展后台自动异步提取 AT，保留手动重试，并新增独立“复制AT”按钮 |
+| `26.7.27D` | 2026-07-27D | 按钮17价格任务超时后进入自动补查等待状态；同一标签页后续出现 `page_loaded` 或 `windows.onFocusChanged` 且已返回活动定价页时，复用当前页面补查价格，最多 2 次，不刷新、不激活、不新建标签页 |
+| `26.7.27C` | 2026-07-27C | 按钮17在 Plus 当前价格为 0 时显示当前账号 AT 输入框和提取按钮；点击后由扩展后台异步 GET `https://chatgpt.com/api/auth/session` 并读取 `accessToken`，不创建或切换标签页 |
+| `26.7.27B` | 2026-07-27B | 按钮17适配定价页只显示 Free/Go 的情况：发现“查看全部套餐”时自动点击并继续查找 Plus；展开后仍无 Plus 时返回提示状态，展示并复制当前页面可见套餐，不再以等待超时结束 |
+| `26.7.27A` | 2026-07-27A | 按钮17升级为“读取Plus价格”：使用 Side Panel + Service Worker 新建并打开 ChatGPT 活动定价页，等待 Plus 卡片动态渲染后提取当前价、原价、币种、计费周期和优惠说明，并支持转到定价页、无缓存刷新和复制结果 |
 | `26.7.22A` | 2026-07-22A | 新增按钮11纯 JS `auth.json` 导出与 Sub2API JSON-RPC 导入；按钮6 Token 后延迟改为 100ms，支持当前 `about:blank` 直接定向并在目标 URL 提交时提前打开确认 Popup；功能16改为“打开GPT登录页”，支持空白页定向、已有页面复用和新建标签三种模式 |
 | `26.7.19B` | 2026-07-19B | 修正版；插件展示版本更新为 `26.7.19B`，Popup 扩展标记更新为 `7.29B`；按钮6自动任务在原生 Side Panel 缺少用户手势时恢复 IPInfo 网页内侧栏，并在来源窗口重新获得焦点后弹出按钮6确认 Popup；用户点击后打开原生 Side Panel、移除网页内嵌栏并关闭确认窗口，且不重复执行已完成的 IPInfo 自动任务 |
 | `26.7.19A` | 2026-07-19A | 封版版本；默认后端端口统一为 `8081`；浏览器启动后自动连接后端并重新执行按钮1 token 获取流程，`onStartup` 未触发时可由首次启动页窗口焦点事件兜底连接并复用旧 token；popup 扩展到功能1-20；按钮6改名为“打开网页AT”，按钮11保留“提取网页AT”并升级为 Side Panel + Service Worker 持久任务；支持无缓存刷新、网页 AT 复制、Codex JSON 导出、Workspace AT 交换/复制、网页 AT 与空间 AT 分字段保存、空间 AT 差异缩写和指纹显示，以及复制按钮按获取状态显示绿色 |
@@ -98,13 +110,16 @@
 └── chrome-extension/
     ├── manifest.json           # Chrome 扩展配置
     ├── background.js           # 后台 service worker，负责捕获导航和结构化日志
+    ├── button6_worker.js       # 按钮6后台任务，负责打开 IPInfo Explore 并记录页面内容
     ├── button11_worker.js      # 按钮11后台任务，负责前台新页、Session 提取、AT 保存、Workspace 查询和空间切换
+    ├── button17_worker.js      # 按钮17后台任务，负责打开活动定价页并提取 Plus 套餐价格
+    ├── button18_worker.js      # 按钮18后台任务，负责打开 Codex 用量页并读取套餐使用量
     ├── content.js              # 页面内 URL 变化采集，不再注入浮窗
     ├── popup.html              # 扩展图标 popup 主页面
     ├── popup.js                # 地址配置、功能按钮、URL 日志展示和手动上报
-    ├── sidepanel.html          # 按钮11 Side Panel 主界面
+    ├── sidepanel.html          # 按钮6、11、17、18共用的 Side Panel 主界面
     ├── sidepanel.css           # Side Panel 样式
-    └── sidepanel.js            # Side Panel 任务状态、网页/空间 AT 分离复制和结果导出
+    └── sidepanel.js            # Side Panel 模式切换、任务状态和结果操作
 ```
 
 说明：
@@ -217,7 +232,7 @@ http://192.168.1.15:8081/api/html/all
 | `POST` | `/api/html/all` | 接收按钮2提取的完整页面 HTML，保存到 `db/[token]/[time].html` |
 | `POST` | `/api/address/from-city` | 保留接口；根据 city/region_name/country 生成地址、kanji/kana 配对姓名，并附带一张 `ctf_toolkit.py` 生成的 Luhn 测试卡 |
 | `POST` | `/api/name/generate` | 根据 JSON-RPC `name.generate` 生成日本测试姓名，返回 kanji、hiragana、romaji、meaning、nameType、gender 等字段 |
-| `POST` | `/api/at/save` | 接收按钮6或按钮11提取的 ChatGPT accessToken，保存到 `db/[token]/at-YYYY-MM-DD.csv` |
+| `POST` | `/api/at/save` | 接收按钮6或按钮11提取的 ChatGPT accessToken；同时写入 `db/[token]/at-YYYY-MM-DD.csv`（`time,user,accessToken`）与总览 `db/at-YYYY-MM-DD.csv`（`time,token,user,accessToken`） |
 | `POST` | `/api/sub2api/import` | 接收 JSON-RPC `sub2api.import`；使用前端生成的 `auth_json` 字符串导入 Sub2API，并返回新增或更新后的账号 ID |
 | `POST` | `/api/log` | 扩展日志上报原始路径 |
 | `POST` | `/api/report` | 扩展日志上报推荐路径，避免部分浏览器拦截 `/api/log` |
@@ -258,8 +273,10 @@ Sub2API 导入请求使用 JSON-RPC 2.0：
   - 功能9：预留按钮，当前使用占位点击提示
   - 功能10：预留按钮，当前使用占位点击提示
   - 功能11“提取网页AT”：使用 Side Panel + Service Worker 后台任务；点击后立即打开并激活新标签页，再跳转 Session 页面完成 AT 提取、保存和 workspace 查询；顶部复制按钮固定复制网页 Session AT，Workspace 列表会显示各空间交换得到的 AT 差异片段与指纹，并由行内按钮独立复制；“导出JSON”导出任务与 Codex token 字段，“导出AUTH”生成并下载 `agent_identity` 格式的 `auth.json`，“导入Sub2API”在前端生成同格式 AUTH 后通过本地 JSON-RPC 接口导入并显示账号 ID
-  - 功能12-15、17-20：预留按钮，当前使用占位点击提示
+  - 功能12-15、19-20：预留按钮，当前使用占位点击提示
   - 功能16“打开GPT登录页”：打开 `https://chatgpt.com/auth/login`；当前活动页为 `about:blank` 时直接定向当前页，否则优先复用已有登录页，未找到时新建标签页
+  - 功能17“读取Plus价格”：使用 Side Panel + Service Worker 新建并打开 `https://chatgpt.com/?promo_campaign=plus-1-month-free#pricing`，等待 Plus 定价卡动态渲染后提取当前价格、原价、币种、计费周期、优惠标签和优惠说明；识别 CTA「你当前的套餐」为已订阅 Plus；页面仅显示 Free/Go 时会自动点击“查看全部套餐”；Plus 当前价格为 0 且币种为 VND 时自动提取 AT 并检测支付通道，非 VND 禁用相关按钮；Checkout body 对齐 HAR（`promo_campaign` + VN/VND），JWT 非 free 跳过 Checkout；“检测MoMo通道”在扩展内创建未确认 Checkout 并读取 Stripe init 支付方式，不经过本地后端
+  - 功能18“读取Codex用量”：使用 Side Panel + `button18_worker.js` 打开 `https://chatgpt.com/codex/settings/usage`（兼容 cloud analytics 跳转），等待用量卡片渲染后读取每月使用上限剩余百分比、进度条宽度和剩余额度
 - popup 打开时读取当前标签页信息。
 - 后台记录扩展安装、浏览器启动、popup 打开等事件。
 - 浏览器启动后后台等待页面恢复，最多尝试连接后端 3 次；连接成功后重新申请 token、收集全部标签页快照、创建 token CSV，并写回 `settings.backendToken`。
@@ -530,7 +547,7 @@ Sub2API 导入请求使用 JSON-RPC 2.0：
 6. 功能6成功提取 accessToken 后自动切换到该标签页并聚焦窗口。
 7. 功能6在运行日志中记录 `chatgpt_at_captured` 事件，包含 accessToken 前20字符、用户邮箱、过期时间等信息。
 8. 后端新增 `/api/at/save` 接口，支持 JSON-RPC 2.0 和普通 JSON 格式。
-9. `/api/at/save` 接口保存 accessToken 到 `db/crx-xxx/at-YYYY-MM-DD.csv`，CSV 格式：`time, user, accessToken`。
+9. `/api/at/save` 接口保存 accessToken 到 `db/crx-xxx/at-YYYY-MM-DD.csv`（`time,user,accessToken`），并同步追加总览 `db/at-YYYY-MM-DD.csv`（`time,token,user,accessToken`）。
 10. 同一天多次提取 AT 会追加到同一文件，第一次写入时自动创建表头。
 11. **已知问题**：浮窗注入功能存在兼容性问题，脚本注入成功且控制台有详细日志，但浮窗元素在部分页面不可见（可能与页面 CSP 或样式冲突有关）。当前建议从运行日志或浏览器控制台获取 accessToken，浮窗功能待后续优化。
 
@@ -542,7 +559,7 @@ Sub2API 导入请求使用 JSON-RPC 2.0：
 - `/api/at/save` 接口逻辑已验证，支持 JSON-RPC 2.0 格式。
 - accessToken 提取功能已验证，可从 `<pre>` 标签正确解析 JSON。
 - 自动切换标签页功能已验证，`chrome.tabs.update` 和 `chrome.windows.update` 调用正常。
-- CSV 保存路径 `db/crx-xxx/at-YYYY-MM-DD.csv` 已验证，表头和数据行正常写入。
+- CSV 保存路径 `db/crx-xxx/at-YYYY-MM-DD.csv` 与总览 `db/at-YYYY-MM-DD.csv` 已验证，表头和数据行正常写入。
 
 ---
 
@@ -961,8 +978,10 @@ https://getip.morelogin.com/black_whiteList_stop_page.html
 - 功能6“打开网页AT”提取 ChatGPT accessToken，展示 workspace 列表，并支持导出 workspace AT JSON 和 `team.csv`
 - 功能7抓取 MayIP 信息，写回 `country`、`city`、`region_name`
 - 功能8查询 AddressGen 城市并申请地址，结果通过浮窗展示
-- 功能9、10、功能12到15以及功能17到20为预留按钮，当前使用占位点击提示
+- 功能9、10、功能12到15以及功能19到20为预留按钮，当前使用占位点击提示
 - 功能16“打开GPT登录页”通过后台统一打开 `https://chatgpt.com/auth/login`，支持当前空白页定向、已有登录页复用和新建标签页三种模式
+- 功能17“读取Plus价格”通过 Side Panel 提交任务，由 `button17_worker.js` 新建并激活定价标签页，读取 Plus 价格/币种/优惠；识别已订阅 Plus；仅 VND 零价时自动提 AT 并检测支付通道；Checkout/Stripe 对齐 HAR，JWT 非 free 跳过
+- 功能18“读取Codex用量”通过 Side Panel 提交任务，由 `button18_worker.js` 打开 Codex 用量页并读取每月使用上限剩余百分比、进度条与剩余额度
 - 功能11“提取网页AT”通过 Side Panel 提交任务，由 `button11_worker.js` 在 Service Worker 中新建并激活标签页、跳转 Session、提取并保存 AT、查询 workspace；网页 Session AT 与 Workspace 交换 AT 分字段保存，顶部复制按钮只读取网页 AT，空间行内复制按钮只读取该行已加载的交换 AT；空间 AT 使用差异片段和指纹缩写，复制按钮按获取状态显示绿色；切换页面后任务继续运行，无缓存刷新会重新运行完整流程
 - 读取当前活动标签页
 - 输出当前页面标题、URL、域名、tab ID、窗口 ID 等信息

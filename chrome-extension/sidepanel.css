@@ -93,6 +93,7 @@ h2 {
 
 .progress-section,
 .details-section,
+.button17-at-section,
 .token-section,
 .feature-section,
 .content-section,
@@ -187,6 +188,65 @@ dd {
   color: #334155;
   font-size: 11px;
   line-height: 1.5;
+}
+
+.button17-at-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.button17-at-row input {
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #172033;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+}
+
+.button17-at-row button {
+  min-height: 36px;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+
+.button17-momo-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.button17-momo-actions button {
+  min-width: 0;
+  padding: 5px 6px;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.button17-momo-result {
+  margin-top: 8px;
+  color: #526174;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.button17-momo-result.success {
+  color: #167052;
+}
+
+.button17-momo-result.warning {
+  color: #92400e;
+}
+
+.button17-momo-result.error {
+  color: #a32635;
 }
 
 .content-box,

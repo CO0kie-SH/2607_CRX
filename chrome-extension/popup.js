@@ -12,7 +12,7 @@ const urlLoggerExportButton = document.getElementById("url-logger-export");
 const urlLoggerClearButton = document.getElementById("url-logger-clear");
 const popupTitleElement = document.querySelector("h1");
 const REDACTED_VALUE = "[REDACTED]";
-const POPUP_BUILD = "7.22A";
+const POPUP_BUILD = "7.27G";
 const DEFAULT_BACKEND_BASE_URL = "http://127.0.0.1:8081/";
 const LEGACY_BACKEND_BASE_URL = "http://127.0.0.1:8080/";
 const DEFAULT_REQUEST_TIMEOUT_MS = 3000;
@@ -41,12 +41,16 @@ const BACKEND_TOKEN_STORAGE_KEY = "settings.backendToken";
 const IP_CAPTURE_STORAGE_KEY = "settings.lastIpCapture";
 const BUTTON6_PENDING_STORAGE_KEY = "button6.pending";
 const BUTTON11_PENDING_STORAGE_KEY = "button11.pending";
+const BUTTON17_PENDING_STORAGE_KEY = "button17.pending";
+const BUTTON18_PENDING_STORAGE_KEY = "button18.pending";
 const SIDEPANEL_ACTIVE_MODE_STORAGE_KEY = "sidepanel.activeMode";
 const SIDEPANEL_PENDING_FEATURE_STORAGE_KEY = "sidepanel.pendingFeature";
 const BUTTON6_NATIVE_PANEL_PENDING_STORAGE_KEY = "button6.nativePanelPending";
 const BUTTON6_SOURCE_WINDOW_STORAGE_KEY = "button6.sourceWindowId";
 const BUTTON6_TARGET_URL = "https://ipinfo.io/explore";
 const CHATGPT_LOGIN_TARGET_URL = "https://chatgpt.com/auth/login";
+const BUTTON17_TARGET_URL = "https://chatgpt.com/?promo_campaign=plus-1-month-free#pricing";
+const BUTTON18_TARGET_URL = "https://chatgpt.com/codex/settings/usage";
 const URL_LOGGER_SETTINGS_KEY = "urlLogger.settings";
 const URL_LOGGER_LOGS_KEY = "urlLogger.global.logs";
 const MAX_RUNTIME_LOGS = 300;
@@ -4754,6 +4758,62 @@ function startButton11SidePanelCapture() {
   }));
 }
 
+function startButton17SidePanelCapture() {
+  const windowId = popupState.currentPageTab?.windowId;
+
+  if (!Number.isInteger(windowId)) {
+    throw new Error("当前窗口信息尚未就绪，请重新打开扩展 Popup。");
+  }
+
+  const payload = {
+    jobId: `button17-${Date.now()}`,
+    windowId,
+    targetUrl: BUTTON17_TARGET_URL,
+    requestedAt: new Date().toISOString()
+  };
+
+  const storePromise = chrome.storage.session.set({
+    [SIDEPANEL_ACTIVE_MODE_STORAGE_KEY]: "button17",
+    [BUTTON17_PENDING_STORAGE_KEY]: payload
+  });
+  const panelPromise = chrome.sidePanel.open({ windowId });
+
+  return Promise.all([storePromise, panelPromise]).then(() => ({
+    ok: true,
+    jobId: payload.jobId,
+    windowId,
+    targetUrl: BUTTON17_TARGET_URL
+  }));
+}
+
+function startButton18SidePanelCapture() {
+  const windowId = popupState.currentPageTab?.windowId;
+
+  if (!Number.isInteger(windowId)) {
+    throw new Error("当前窗口信息尚未就绪，请重新打开扩展 Popup。");
+  }
+
+  const payload = {
+    jobId: `button18-${Date.now()}`,
+    windowId,
+    targetUrl: BUTTON18_TARGET_URL,
+    requestedAt: new Date().toISOString()
+  };
+
+  const storePromise = chrome.storage.session.set({
+    [SIDEPANEL_ACTIVE_MODE_STORAGE_KEY]: "button18",
+    [BUTTON18_PENDING_STORAGE_KEY]: payload
+  });
+  const panelPromise = chrome.sidePanel.open({ windowId });
+
+  return Promise.all([storePromise, panelPromise]).then(() => ({
+    ok: true,
+    jobId: payload.jobId,
+    windowId,
+    targetUrl: BUTTON18_TARGET_URL
+  }));
+}
+
 async function openChatGptLoginPage() {
   const response = await chrome.runtime.sendMessage({
     type: "OPEN_CHATGPT_LOGIN_PAGE",
@@ -5120,6 +5180,54 @@ function bindPopupActions() {
           button.disabled = false;
           button.textContent = originalText;
         }
+        return;
+      }
+
+      if (featureId === "17") {
+        const originalText = button.textContent;
+
+        try {
+          button.disabled = true;
+          button.textContent = "读取中...";
+          const result = await startButton17SidePanelCapture();
+          setSaveStatus(`按钮17 Plus 价格任务已提交：${result.jobId}`);
+        } catch (error) {
+          setSaveStatus(error.message || "按钮17 Plus 价格任务启动失败。", true);
+          console.error(error);
+        } finally {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+
+        logEvent("feature_button_clicked", {
+          featureId,
+          targetUrl: BUTTON17_TARGET_URL,
+          mode: "sidepanel"
+        });
+        return;
+      }
+
+      if (featureId === "18") {
+        const originalText = button.textContent;
+
+        try {
+          button.disabled = true;
+          button.textContent = "读取中...";
+          const result = await startButton18SidePanelCapture();
+          setSaveStatus(`按钮18 Codex 用量任务已提交：${result.jobId}`);
+        } catch (error) {
+          setSaveStatus(error.message || "按钮18 Codex 用量任务启动失败。", true);
+          console.error(error);
+        } finally {
+          button.disabled = false;
+          button.textContent = originalText;
+        }
+
+        logEvent("feature_button_clicked", {
+          featureId,
+          targetUrl: BUTTON18_TARGET_URL,
+          mode: "sidepanel"
+        });
         return;
       }
 
